@@ -10,7 +10,7 @@ without the GUI.
 Author: **Zhentong Li** — eternitylzt@gmail.com —
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Status: functional research preview (`0.8.1`). The core extraction algorithm,
+> Status: functional research preview (`0.8.2`). The core extraction algorithm,
 > FITS/SAV readers, Qt GUI, export, project files, tests, and Windows packaging
 > recipe are included. See [known limitations](#known-limitations) before using
 > a result in a publication.
@@ -18,6 +18,13 @@ Author: **Zhentong Li** — eternitylzt@gmail.com —
 This is an early public research preview. Please report reproducible problems,
 sample-data compatibility issues, and Windows packaging feedback through the
 [SolarTimeDistanceExplorer issue tracker](https://github.com/eternitylzt/SolarTimeDistanceExplorer/issues).
+
+## Windows download
+
+Download `SolarTimeDistanceExplorer-0.8.2-Windows-x64.zip` from
+[GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases),
+extract the complete folder, and run `SolarTimeDistanceExplorer.exe`. Python is
+not required. Keep the EXE and its `_internal` directory together.
 
 ## Quick start (Windows)
 
@@ -133,13 +140,21 @@ Settings controls whether checked Slit and Region overlays remain visible when
 switching the left-side analysis tab. TD tick labels offer fixed HH:MM:SS,
 HH:MM, full date-time, or a custom `strftime` pattern.
 Slope lines are annotated as v₁, v₂, … next to the selected ridges and use
-distinct line/text colours by default. Their requested output unit may differ
+distinct line/text colours by default. Finished measurements do not retain
+endpoint markers, and their labels can be dragged. Disable Auto colors, then
+choose a v_n entry (or click its line/label) to style that measurement's line
+and text independently. Their requested output unit may differ
 from the plotted distance unit when the WCS pixel scale supports the conversion;
 annotation background can be transparent. TD title, both axis
 labels, axis/tick sizes, grid, colorbar, aspect, colormap, stretch and range are
 configurable, and the x-axis title can optionally include the first timestamp.
 After zoom or pan, that optional start timestamp follows the left edge of the
 currently visible true-time interval.
+
+View → Drawing History keeps a bounded session list (20 entries by default) of
+opened map data, completed Slits/Regions, TD plots, region trends, and
+histograms. Selecting an entry returns to its relevant page and marker when the
+same dataset remains open.
 
 ## Closed-region analysis
 

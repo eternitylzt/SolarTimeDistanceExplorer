@@ -24,6 +24,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
     """Publication-quality TD renderer using real timestamp bin widths."""
 
     slope_measured = Signal(str)
+    measurements_changed = Signal()
+    measurement_selected = Signal(int)
 
     def __init__(self) -> None:
         self.figure = Figure(figsize=(8, 7), layout="constrained")
@@ -36,6 +38,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._measurement_groups: list[dict[str, Any]] = []
         self._pending_artists: list[Any] = []
         self._pending_color: str | None = None
+        self._selected_measurement_index = 0
+        self._drag_label_group: dict[str, Any] | None = None
         self.slope_color = "#ffffff"
         self.slope_linewidth = 1.5
         self.slope_linestyle = "-"
@@ -49,6 +53,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._include_start_time = False
         self._base_x_label = "Observation Time [UTC]"
         self.mpl_connect("button_press_event", self._on_press)
+        self.mpl_connect("motion_notify_event", self._on_motion)
+        self.mpl_connect("button_release_event", self._on_release)
 
     def show_result(
         self,
@@ -132,6 +138,9 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._pending_artists.clear()
         self._pending_color = None
         self._measure_points.clear()
+        self._selected_measurement_index = 0
+        self._drag_label_group = None
+        self.measurements_changed.emit()
         if self._true_time:
             self.axes.callbacks.connect("xlim_changed", self._time_xlim_changed)
             self._update_time_xlabel()
@@ -202,8 +211,12 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         return SLOPE_COLORS[(index - 1) % len(SLOPE_COLORS)] if self.slope_auto_colors else self.slope_color
 
     def _style_measurement_group(self, group: dict[str, Any]) -> None:
-        color = self._measurement_color(int(group["index"]))
-        text_color = color if self.slope_auto_colors else self.slope_text_color
+        if self.slope_auto_colors:
+            color = self._measurement_color(int(group["index"]))
+            group["line_color"] = color
+            group["text_color"] = color
+        color = str(group.get("line_color", self.slope_color))
+        text_color = str(group.get("text_color", color))
         for artist in group["artists"]:
             if isinstance(artist, Text):
                 artist.set_color(text_color)
@@ -219,6 +232,36 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
                 artist.set_color(color)
                 artist.set_linewidth(self.slope_linewidth)
                 artist.set_linestyle(self.slope_linestyle)
+
+    @property
+    def measurement_count(self) -> int:
+        return len(self._measurement_groups)
+
+    def measurement_colors(self, index: int) -> tuple[str, str] | None:
+        group = next((item for item in self._measurement_groups if item["index"] == index), None)
+        if group is None:
+            return None
+        return str(group["line_color"]), str(group["text_color"])
+
+    def select_measurement(self, index: int) -> None:
+        """Select a completed velocity marker for per-marker styling."""
+        valid = any(item["index"] == index for item in self._measurement_groups)
+        self._selected_measurement_index = index if valid else 0
+        self.measurement_selected.emit(self._selected_measurement_index)
+
+    def set_measurement_colors(
+        self, index: int, *, line_color: str | None = None, text_color: str | None = None
+    ) -> None:
+        """Change only one selected measurement when automatic colours are disabled."""
+        group = next((item for item in self._measurement_groups if item["index"] == index), None)
+        if group is None:
+            return
+        if line_color is not None:
+            group["line_color"] = line_color
+        if text_color is not None:
+            group["text_color"] = text_color
+        self._style_measurement_group(group)
+        self.draw_idle()
 
     def clear_measurements(self) -> None:
         """Reliably remove all tagged slope artists from every current axes."""
@@ -243,25 +286,33 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._pending_color = None
         self._measure_points.clear()
         self._measure_mode = False
+        self._selected_measurement_index = 0
+        self._drag_label_group = None
         self.unsetCursor()
         self.draw_idle()
+        self.measurements_changed.emit()
 
     def _on_press(self, event: Any) -> None:
-        if not self._measure_mode or self.result is None or event.inaxes is not self.axes:
+        if self.result is None or event.inaxes is not self.axes:
             return
         if event.xdata is None or event.ydata is None:
+            return
+        if not self._measure_mode:
+            for group in reversed(self._measurement_groups):
+                label = group.get("label")
+                line = group.get("line")
+                if isinstance(label, Text) and label.contains(event)[0]:
+                    self._drag_label_group = group
+                    self.select_measurement(int(group["index"]))
+                    return
+                if isinstance(line, Line2D) and line.contains(event)[0]:
+                    self.select_measurement(int(group["index"]))
+                    return
             return
         self._measure_points.append((float(event.xdata), float(event.ydata)))
         measurement_index = len(self._measurement_groups) + 1
         color = self._pending_color or self._measurement_color(measurement_index)
         self._pending_color = color
-        points = self.axes.plot(
-            event.xdata, event.ydata, "o", color=color, markeredgecolor="black"
-        )
-        for artist in points:
-            artist.set_gid("slope_measurement")
-        self._measurement_artists.extend(points)
-        self._pending_artists.extend(points)
         if len(self._measure_points) < 2:
             self.draw_idle()
             return
@@ -278,10 +329,10 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         velocity = self._velocity_text(delta_s, delta_t, measurement_index)
         text_color = color if self.slope_auto_colors else self.slope_text_color
         transparent = self.slope_background_color.lower() == "transparent"
-        label = self.axes.annotate(
+        label = self.axes.text(
+            (t1 + t2) / 2.0,
+            (s1 + s2) / 2.0,
             velocity,
-            ((t1 + t2) / 2.0, (s1 + s2) / 2.0),
-            xytext=(8, 8), textcoords="offset points",
             color=text_color, fontsize=self.slope_fontsize,
             bbox={
                 "facecolor": "none" if transparent else self.slope_background_color,
@@ -295,9 +346,14 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             "index": measurement_index,
             "delta_s": delta_s,
             "delta_t": delta_t,
-            "artists": [*self._pending_artists, *lines, label],
+            "line_color": color,
+            "text_color": text_color,
+            "line": lines[0],
+            "label": label,
+            "artists": [*lines, label],
         }
         self._measurement_groups.append(group)
+        self._selected_measurement_index = measurement_index
         plain_velocity = velocity.replace("$", "").replace("{", "").replace("}", "")
         time_unit = "s" if self._true_time else "frame"
         self.slope_measured.emit(
@@ -309,6 +365,21 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._pending_artists = []
         self._pending_color = None
         self.draw_idle()
+        self.measurements_changed.emit()
+        self.measurement_selected.emit(measurement_index)
+
+    def _on_motion(self, event: Any) -> None:
+        if self._drag_label_group is None or event.inaxes is not self.axes:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        label = self._drag_label_group.get("label")
+        if isinstance(label, Text):
+            label.set_position((float(event.xdata), float(event.ydata)))
+            self.draw_idle()
+
+    def _on_release(self, _event: Any) -> None:
+        self._drag_label_group = None
 
     def _velocity_text(self, delta_s: float, delta_t: float, index: int = 1) -> str:
         if delta_t == 0:

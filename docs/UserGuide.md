@@ -48,7 +48,10 @@
     title includes the first UTC timestamp. Slope colour, width and annotation
     size, annotation text colour and velocity decimal precision apply both to new
     measurements and existing visible markers. Auto colors labels successive
-    measurements v₁, v₂, … with matching line/text colours. Velocity unit can
+    measurements v₁, v₂, … with matching line/text colours and no persistent
+    endpoint circles. Drag a velocity label to reposition it. Disable Auto
+    colors and choose the desired v_n under Selected—or click its line/label—
+    before setting its line and text colours. Velocity unit can
     be changed independently of the plotted distance axis, and the annotation
     background may be transparent. If the x-axis title includes Start time,
     zooming or panning updates it to the visible interval's left edge.
@@ -150,6 +153,12 @@ the source. If a source moved, point the dialog at its new location.
 Settings → Clear Current Data Cache releases decoded frames and temporary
 AIA-prepared FITS files while retaining the open dataset and currently displayed
 frame. Subsequent frame access is intentionally read/prepared again.
+
+View → Drawing History lists the most recent map loads, completed Slits and
+Regions, TD results, region trends, and histograms. Click an item to return to
+the corresponding page; marker entries also reselect that marker while its
+dataset remains open. The default maximum is 20 and can be changed from the
+bottom of the same menu.
 
 ## Troubleshooting
 

@@ -61,4 +61,24 @@ $env:STDE_SMOKE_EXPORTS = $null
 if ($smoke.ExitCode -ne 0) {
     throw "Bundled executable smoke test failed with exit code $($smoke.ExitCode)."
 }
+
+# Keep the distributable self-explanatory and package the complete onedir tree;
+# the EXE cannot be separated from its bundled _internal runtime directory.
+$appDirectory = Split-Path -Parent $exe
+Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $appDirectory -Force
+$guideDirectory = Join-Path $appDirectory "docs"
+New-Item -ItemType Directory -Path $guideDirectory -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $projectRoot "docs\UserGuide.md") -Destination $guideDirectory -Force
+$version = (& $venvPython -c "from app.version import __version__; print(__version__)").Trim()
+$releaseDirectory = Join-Path $projectRoot "release"
+New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+$archive = Join-Path $releaseDirectory "SolarTimeDistanceExplorer-$version-Windows-x64.zip"
+if (Test-Path -LiteralPath $archive) {
+    Remove-Item -LiteralPath $archive -Force
+}
+Compress-Archive -LiteralPath $appDirectory -DestinationPath $archive -CompressionLevel Optimal
+$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+$checksum = Join-Path $releaseDirectory "SolarTimeDistanceExplorer-$version-Windows-x64.sha256.txt"
+Set-Content -LiteralPath $checksum -Value "$hash  $(Split-Path -Leaf $archive)" -Encoding ascii
 Write-Host "Build and smoke test succeeded: $exe"
+Write-Host "Release archive: $archive"

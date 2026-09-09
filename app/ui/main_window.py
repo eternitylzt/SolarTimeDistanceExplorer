@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from PySide6.QtCore import QEventLoop, QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDoubleSpinBox,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -96,9 +99,11 @@ class MainWindow(QMainWindow):
         self.reference_frame = 0
         self.paths: list[PathGeometry] = []
         self.active_path_id: str | None = None
+        self._next_slit_number = 1
         self.td_result: TDResult | None = None
         self.regions: list[RegionGeometry] = []
         self.active_region_id: str | None = None
+        self._next_region_number = 1
         self.region_result: RegionTrendResult | RegionHistogramResult | None = None
         self._full_region_result: RegionTrendResult | RegionHistogramResult | None = None
         self._region_worker: RegionTrendWorker | None = None
@@ -112,6 +117,9 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("SolarPhysics", "SolarTimeDistanceExplorer")
         self.keep_cross_tab_overlays = bool(self.settings.value("keep_cross_tab_overlays", False, type=bool))
         self.frame_cache_size = int(self.settings.value("frame_cache_size", 12))
+        self.history_limit = int(self.settings.value("history_limit", 20))
+        self._history_entries: list[dict[str, Any]] = []
+        self._history_marker_ids: set[str] = set()
         self._build_ui()
         self._build_actions()
         self._build_menus()
@@ -255,10 +263,12 @@ class MainWindow(QMainWindow):
         self.slope_color = QPushButton("#ffffff")
         self.slope_text_color = QPushButton("#ffffff")
         self.slope_background = QPushButton("#000000")
-        self.slope_background_transparent, _ = self._checkbox("Transparent background", False)
+        self.slope_background_transparent, _ = self._checkbox("Transparent", False)
         self.slope_background_transparent.toggled.connect(self.slope_background.setDisabled)
         self.slope_auto_colors, _ = self._checkbox("Auto colors", True)
         self.slope_color.setDisabled(True); self.slope_text_color.setDisabled(True)
+        self.slope_selection, _ = self._combo([("Next measurement", 0)])
+        self.slope_selection.setFixedWidth(135)
         self.slope_velocity_unit, _ = self._combo([
             ("Same as distance axis", "auto"), ("pixel/s", "pixel"),
             ("arcsec/s", "arcsec"), ("km/s", "km"), ("Mm/s", "Mm"),
@@ -268,7 +278,11 @@ class MainWindow(QMainWindow):
         self.slope_fontsize = QDoubleSpinBox(); self.slope_fontsize.setRange(6, 30); self.slope_fontsize.setValue(10); self.slope_fontsize.setSuffix(" pt")
         self.slope_precision = QSpinBox(); self.slope_precision.setRange(0, 6); self.slope_precision.setValue(1); self.slope_precision.setSuffix(" 位")
         self.slope_width.setMaximumWidth(80); self.slope_fontsize.setMaximumWidth(90); self.slope_precision.setMaximumWidth(80)
-        self.slope_velocity_unit.setMaximumWidth(150)
+        self.slope_velocity_unit.setFixedWidth(150)
+        self.slope_color.setFixedWidth(88)
+        self.slope_text_color.setFixedWidth(88)
+        self.slope_background.setFixedWidth(88)
+        self.slope_linestyle.setFixedWidth(112)
         td_export = QPushButton("导出时距图")
         td_data = QPushButton("导出时距数据")
         slope = QPushButton("测量斜率/速度")
@@ -280,6 +294,9 @@ class MainWindow(QMainWindow):
         self.slope_color.clicked.connect(self._choose_slope_color)
         self.slope_text_color.clicked.connect(self._choose_slope_text_color)
         self.slope_background.clicked.connect(self._choose_slope_background)
+        self.slope_selection.currentIndexChanged.connect(self._slope_selection_changed)
+        self.td_canvas.measurements_changed.connect(self._refresh_slope_measurement_selector)
+        self.td_canvas.measurement_selected.connect(self._select_slope_measurement)
         for widget in (self.td_vmin, self.td_vmax, self.td_percentile_low, self.td_percentile_high, self.td_axis_label_size, self.td_tick_size):
             widget.valueChanged.connect(self._redraw_td)
         self.td_include_start.toggled.connect(self._redraw_td)
@@ -326,27 +343,31 @@ class MainWindow(QMainWindow):
         td_style.addWidget(QLabel("Aspect")); td_style.addWidget(self.td_aspect)
         td_style.addStretch(1)
         td_layout.addLayout(td_style)
+        slope_group = QGroupBox("Slope / Velocity Measurement")
+        slope_group_layout = QVBoxLayout(slope_group)
+        slope_actions = QHBoxLayout()
+        slope_actions.addWidget(self.slope_auto_colors)
+        slope_actions.addWidget(QLabel("Selected")); slope_actions.addWidget(self.slope_selection)
+        slope_actions.addStretch(1)
+        slope_actions.addWidget(slope); slope_actions.addWidget(clear_slope)
+        slope_group_layout.addLayout(slope_actions)
         slope_style = QHBoxLayout()
-        slope_style.addWidget(self.slope_auto_colors)
-        slope_style.addWidget(QLabel("斜率线颜色")); slope_style.addWidget(self.slope_color)
-        slope_style.addWidget(QLabel("线宽")); slope_style.addWidget(self.slope_width)
-        slope_style.addWidget(QLabel("Line style")); slope_style.addWidget(self.slope_linestyle)
+        slope_style.addWidget(QLabel("Line")); slope_style.addWidget(self.slope_color)
+        slope_style.addWidget(QLabel("Width")); slope_style.addWidget(self.slope_width)
+        slope_style.addWidget(QLabel("Style")); slope_style.addWidget(self.slope_linestyle)
+        slope_style.addWidget(QLabel("Text")); slope_style.addWidget(self.slope_text_color)
+        slope_style.addWidget(QLabel("Size")); slope_style.addWidget(self.slope_fontsize)
         slope_style.addStretch(1)
-        td_layout.addLayout(slope_style)
+        slope_group_layout.addLayout(slope_style)
         slope_annotation_style = QHBoxLayout()
-        slope_annotation_style.addWidget(QLabel("标注颜色")); slope_annotation_style.addWidget(self.slope_text_color)
-        slope_annotation_style.addWidget(QLabel("背景")); slope_annotation_style.addWidget(self.slope_background)
+        slope_annotation_style.addWidget(QLabel("Background")); slope_annotation_style.addWidget(self.slope_background)
         slope_annotation_style.addWidget(self.slope_background_transparent)
-        slope_annotation_style.addWidget(QLabel("标注字号")); slope_annotation_style.addWidget(self.slope_fontsize)
         slope_annotation_style.addStretch(1)
-        td_layout.addLayout(slope_annotation_style)
-        slope_value_style = QHBoxLayout()
-        slope_value_style.addWidget(QLabel("速度单位")); slope_value_style.addWidget(self.slope_velocity_unit)
-        slope_value_style.addWidget(QLabel("小数位")); slope_value_style.addWidget(self.slope_precision)
-        slope_value_style.addStretch(1)
-        td_layout.addLayout(slope_value_style)
+        slope_annotation_style.addWidget(QLabel("Velocity unit")); slope_annotation_style.addWidget(self.slope_velocity_unit)
+        slope_annotation_style.addWidget(QLabel("Decimals")); slope_annotation_style.addWidget(self.slope_precision)
+        slope_group_layout.addLayout(slope_annotation_style)
+        td_layout.addWidget(slope_group)
         td_actions = QHBoxLayout()
-        td_actions.addWidget(slope); td_actions.addWidget(clear_slope)
         td_actions.addWidget(td_export); td_actions.addWidget(td_data); td_actions.addStretch(1)
         td_layout.addLayout(td_actions)
         self._td_range_mode_changed()
@@ -494,6 +515,16 @@ class MainWindow(QMainWindow):
         while f"{prefix}{index}" in used:
             index += 1
         return f"{prefix}{index}"
+
+    def _allocate_marker_name(self, prefix: str, names: list[str]) -> str:
+        """Allocate a session-monotonic S/R label that cannot reuse a live name."""
+        attribute = "_next_slit_number" if prefix == "S" else "_next_region_number"
+        number = max(1, int(getattr(self, attribute, 1)))
+        occupied = {name.strip().casefold() for name in names if name.strip()}
+        while f"{prefix}{number}".casefold() in occupied:
+            number += 1
+        setattr(self, attribute, number + 1)
+        return f"{prefix}{number}"
 
     def _install_layout_action(self, toolbar: NavigationToolbar2QT, canvas: Any, key: str) -> None:
         """Replace Matplotlib's ineffective constrained-layout control and restore saved margins."""
@@ -786,8 +817,10 @@ class MainWindow(QMainWindow):
     def _choose_slope_color(self) -> None:
         color = QColorDialog.getColor(QColor(self.slope_color.text()), self, "选择斜率线颜色")
         if color.isValid():
-            self.slope_color.setText(color.name())
-            self.slope_color.setStyleSheet(f"QPushButton {{ color: {color.name()}; }}")
+            self._set_color_button(self.slope_color, color.name())
+            index = int(self.slope_selection.currentData() or 0)
+            if index and not self.slope_auto_colors.isChecked():
+                self.td_canvas.set_measurement_colors(index, line_color=color.name())
             self._apply_slope_style()
 
     def _choose_slope_text_color(self) -> None:
@@ -796,6 +829,9 @@ class MainWindow(QMainWindow):
         )
         if color.isValid():
             self._set_color_button(self.slope_text_color, color.name())
+            index = int(self.slope_selection.currentData() or 0)
+            if index and not self.slope_auto_colors.isChecked():
+                self.td_canvas.set_measurement_colors(index, text_color=color.name())
             self._apply_slope_style()
 
     def _choose_slope_background(self) -> None:
@@ -808,9 +844,44 @@ class MainWindow(QMainWindow):
             self._apply_slope_style()
 
     def _slope_auto_colors_changed(self, checked: bool) -> None:
-        self.slope_color.setDisabled(checked)
-        self.slope_text_color.setDisabled(checked)
         self._apply_slope_style()
+        self._sync_selected_slope_controls()
+
+    def _refresh_slope_measurement_selector(self) -> None:
+        """Rebuild the per-measurement selector after add, clear, or TD redraw."""
+        count = self.td_canvas.measurement_count
+        self.slope_selection.blockSignals(True)
+        self.slope_selection.clear()
+        self.slope_selection.addItem("Next measurement", 0)
+        for index in range(1, count + 1):
+            self.slope_selection.addItem(f"v_{index}", index)
+        self.slope_selection.setCurrentIndex(count if count else 0)
+        self.slope_selection.blockSignals(False)
+        self._sync_selected_slope_controls()
+
+    def _select_slope_measurement(self, index: int) -> None:
+        combo_index = self.slope_selection.findData(index)
+        if combo_index < 0:
+            return
+        self.slope_selection.blockSignals(True)
+        self.slope_selection.setCurrentIndex(combo_index)
+        self.slope_selection.blockSignals(False)
+        self._sync_selected_slope_controls()
+
+    def _slope_selection_changed(self) -> None:
+        index = int(self.slope_selection.currentData() or 0)
+        self.td_canvas.select_measurement(index)
+        self._sync_selected_slope_controls()
+
+    def _sync_selected_slope_controls(self) -> None:
+        index = int(self.slope_selection.currentData() or 0)
+        colors = self.td_canvas.measurement_colors(index)
+        if colors is not None:
+            self._set_color_button(self.slope_color, colors[0])
+            self._set_color_button(self.slope_text_color, colors[1])
+        editable = not self.slope_auto_colors.isChecked() and colors is not None
+        self.slope_color.setEnabled(editable)
+        self.slope_text_color.setEnabled(editable)
 
     def _apply_slope_style(self) -> None:
         self.td_canvas.set_slope_style(
@@ -847,11 +918,12 @@ class MainWindow(QMainWindow):
             "【切片坐标保存方式】“像素坐标”保存参考帧中的 x/y；“世界坐标/WCS”把切片保存为太阳物理坐标。它决定切片本身如何被记录。\n\n"
             "【逐帧跟踪方式】“固定像素位置”在每帧使用相同 x/y；“固定世界坐标”利用每帧 WCS 把同一太阳位置重新投影到像素，可适应 CRPIX/指向变化；“太阳自转跟踪”目前仍为实验功能。世界坐标保存通常应配合固定世界坐标跟踪。\n\n"
             "【时距图距离单位】只决定生成结果纵轴的累计弧长单位，可选 pixel、arcsec、km、Mm；不会改变切片保存或跟踪方式。km/Mm 仅在 WCS 与太阳距离足以可靠换算时可用。\n\n"
-            "【速度测量】每两次点击生成一组斜率，自动标为 v₁、v₂…并采用不同默认颜色。Velocity unit 可独立于 TD 纵轴选择 pixel/s、arcsec/s、km/s 或 Mm/s；涉及 pixel 的换算只在结果保存了可靠 WCS 像素尺度时可用。标注背景可设为 Transparent。\n\n"
+            "【速度测量】相关选项集中在 Slope / Velocity Measurement。每两次点击生成一条不带端点圆圈的斜率线，自动标为 v₁、v₂…；文字可直接拖动。Auto colors 开启时使用不同默认颜色；关闭后，在 Selected 选择 v_n，或直接点击其线/文字，再单独修改该组 Line 与 Text 颜色。Velocity unit 可独立于 TD 纵轴选择 pixel/s、arcsec/s、km/s 或 Mm/s；涉及 pixel 的换算只在结果保存了可靠 WCS 像素尺度时可用。标注背景可设为 Transparent。\n\n"
             "【曲线平滑参数 s】仅用于平滑曲线。s=0 时样条经过控制点；s 越大，允许样条偏离控制点的平方残差越大，曲线通常越平滑。它不是像素宽度，也不是采样步长。建议先从 0 开始，小幅增加并观察预览。\n\n"
             "【Normalization】Percentile 按可设置的 Lower/Upper percentile 确定显示上下限（默认 1%/99%）；Manual 使用 vmin/vmax；Min–Max 使用当前数据极值；ZScale 使用天文图像常用的鲁棒线性范围。切换或修改参数会立即重绘，但不修改原数据。\n\n"
             "【动画导出】默认导出图像窗口当前显示的坐标范围；也可以改为完整图像。坐标轴、实际观测时间、标题、Colorbar、Slit 和 Region 均可分别选择是否写入每一帧。\n\n"
             "【缓存与保存视图】打开新的数据源时会自动释放上一个数据集的内存与 AIA 临时缓存；也可用“设置 → 清除当前数据缓存”手动释放。保存当前视图时可独立选择是否包含坐标轴、标题和 Colorbar。\n\n"
+            "【绘图历史】“查看 → 绘图历史”按时间记录 Map 数据载入、已完成的 Slit/Region、TD、区域趋势和直方图；点击可回到对应页面，同一数据源仍打开时还会重新选中标记。默认最多 20 条，可在历史菜单底部调整。\n\n"
             "【科学宽度阴影】勾选后，Map 上的半透明色带显示实际 Slit 宽度，并随数值/单位实时更新；它对应法向取样范围。显示线宽只改变中心线的屏幕粗细，两者完全独立。\n\n"
             "【绘图页布局】Image、Time–Distance 和 Region 工具栏中的“布局”用于设置 Left/Right/Top/Bottom/WSpace/HSpace。设置会立即应用并按页面保存；这些参数是画布边距/子图间距，不是数据网格刻度间隔。",
         )
@@ -889,6 +961,8 @@ class MainWindow(QMainWindow):
         self.keep_overlays_action.toggled.connect(self._set_keep_overlays)
         self.cache_size_action = QAction("内存缓存帧数…", self, triggered=self.configure_cache_size)
         self.clear_cache_action = QAction("清除当前数据缓存", self, triggered=self.clear_dataset_cache)
+        self.history_limit_action = QAction("设置历史记录条数…", self, triggered=self.configure_history_limit)
+        self.clear_history_action = QAction("清除绘图历史", self, triggered=self.clear_history)
 
         for action, shortcut in (
             (self.new_path_action, "N"),
@@ -925,6 +999,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.exit_action)
         view_menu = self.menuBar().addMenu("查看(&V)")
         view_menu.addAction(self.metadata_action)
+        self.history_menu = view_menu.addMenu("绘图历史")
+        self._rebuild_history_menu()
         animation_menu = self.menuBar().addMenu("动画(&A)")
         animation_menu.addAction("播放/暂停", self.toggle_animation, QKeySequence("Space"))
         animation_menu.addAction("导出 GIF / MP4…", self.export_animation)
@@ -939,6 +1015,97 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.clear_cache_action)
         help_menu = self.menuBar().addMenu("帮助(&H)")
         help_menu.addActions([self.feature_help_action, self.drawing_help_action, self.about_action, self.log_action])
+
+    def _record_history(
+        self,
+        description: str,
+        *,
+        main_tab: int,
+        left_tab: int | None = None,
+        marker_kind: str | None = None,
+        marker_id: str | None = None,
+        frame: int | None = None,
+    ) -> None:
+        """Record a bounded, navigation-only history without retaining image arrays."""
+        self._history_entries.insert(
+            0,
+            {
+                "id": str(uuid4()),
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "description": description,
+                "main_tab": main_tab,
+                "left_tab": left_tab,
+                "marker_kind": marker_kind,
+                "marker_id": marker_id,
+                "frame": self.current_frame if frame is None else frame,
+                "source": str(self.dataset.source) if self.dataset is not None else None,
+            },
+        )
+        del self._history_entries[max(1, self.history_limit):]
+        if hasattr(self, "history_menu"):
+            self._rebuild_history_menu()
+
+    def _rebuild_history_menu(self) -> None:
+        self.history_menu.clear()
+        if not self._history_entries:
+            empty = self.history_menu.addAction("暂无绘图历史")
+            empty.setEnabled(False)
+        else:
+            for entry in self._history_entries:
+                action = self.history_menu.addAction(
+                    f"[{entry['time']}] {entry['description']}"
+                )
+                action.triggered.connect(
+                    lambda _checked=False, entry_id=entry["id"]: self._open_history_entry(entry_id)
+                )
+        self.history_menu.addSeparator()
+        self.history_menu.addAction(self.history_limit_action)
+        self.history_menu.addAction(self.clear_history_action)
+
+    def configure_history_limit(self) -> None:
+        value, accepted = QInputDialog.getInt(
+            self, "绘图历史", "最多保留的历史条数：", self.history_limit, 5, 200, 1
+        )
+        if not accepted:
+            return
+        self.history_limit = value
+        self.settings.setValue("history_limit", value)
+        del self._history_entries[value:]
+        self._rebuild_history_menu()
+
+    def clear_history(self) -> None:
+        self._history_entries.clear()
+        self._history_marker_ids.clear()
+        self._rebuild_history_menu()
+        self.statusBar().showMessage("绘图历史已清除。")
+
+    def _open_history_entry(self, entry_id: str) -> None:
+        entry = next((item for item in self._history_entries if item["id"] == entry_id), None)
+        if entry is None:
+            return
+        current_source = str(self.dataset.source) if self.dataset is not None else None
+        if entry.get("source") and entry["source"] != current_source:
+            self.statusBar().showMessage("该历史项属于先前的数据源；请先重新打开对应数据。", 8000)
+            return
+        frame = entry.get("frame")
+        if self.dataset is not None and isinstance(frame, int) and 0 <= frame < self.dataset.n_frames:
+            self.set_current_frame(frame)
+        left_tab = entry.get("left_tab")
+        if isinstance(left_tab, int):
+            self.left_tabs.setCurrentIndex(left_tab)
+        self.main_tabs.setCurrentIndex(int(entry["main_tab"]))
+        marker_id = entry.get("marker_id")
+        if entry.get("marker_kind") == "slit" and marker_id:
+            row = next((i for i, item in enumerate(self.paths) if item.id == marker_id), -1)
+            if row >= 0:
+                self.path_panel.paths.setCurrentRow(row)
+                self._active_path_changed(row)
+        elif entry.get("marker_kind") == "region" and marker_id:
+            row = next((i for i, item in enumerate(self.regions) if item.id == marker_id), -1)
+            if row >= 0:
+                self.region_panel.regions.setCurrentRow(row)
+                self._active_region_changed(row)
+        self.statusBar().showMessage(f"已跳转：{entry['description']}")
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("常用操作")
@@ -1169,9 +1336,11 @@ class MainWindow(QMainWindow):
         self.reference_frame = 0
         self.paths.clear()
         self.active_path_id = None
+        self._next_slit_number = 1
         self.td_result = None
         self.regions.clear()
         self.active_region_id = None
+        self._next_region_number = 1
         self.region_result = None
         self._full_region_result = None
         self._fixed_norm = None
@@ -1222,6 +1391,9 @@ class MainWindow(QMainWindow):
         cache_note = "；已清除上一数据集缓存" if previous_cache_cleared else ""
         self.statusBar().showMessage(
             f"已从 {dataset.source} 加载 {dataset.n_frames} 帧{cache_note}"
+        )
+        self._record_history(
+            f"Opened map data: {Path(str(dataset.source)).name}", main_tab=0, left_tab=0, frame=0
         )
 
     def set_current_frame(self, index: int) -> None:
@@ -1327,21 +1499,31 @@ class MainWindow(QMainWindow):
             return
         geometry = PathGeometry(
             path_type=path_type,
-            name=self._next_marker_name("S", [item.name for item in self.paths]),
+            name=self._allocate_marker_name("S", [item.name for item in self.paths]),
         )
         geometry.display_color = SLIT_COLORS[len(self.paths) % len(SLIT_COLORS)]
         geometry.label_color = geometry.display_color
+        self._apply_path_panel_settings(geometry, include_name=False)
         self.paths.append(geometry)
         self.active_path_id = geometry.id
         self.path_panel.paths.blockSignals(True)
         self.path_panel.paths.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
         self.path_panel.paths.setCurrentRow(len(self.paths) - 1)
         self.path_panel.paths.blockSignals(False)
-        self._path_settings_changed()
-        # Selecting the new list item calls set_geometry(), which intentionally
-        # exits drawing mode for ordinary selection. Enter drawing only after
-        # that signal chain has completed.
+        self._load_path_settings(geometry)
         self.path_editor.begin_geometry(geometry)
+        # A native menu/list selection can deliver a queued current-row event
+        # after the QAction returns. Reassert drawing once the event queue is
+        # drained so a stale selection can never cancel a freshly created Slit.
+        QTimer.singleShot(0, lambda marker_id=geometry.id: self._ensure_new_path_drawing(marker_id))
+
+    def _ensure_new_path_drawing(self, marker_id: str) -> None:
+        geometry = next((item for item in self.paths if item.id == marker_id), None)
+        if geometry is None or geometry.id != self.active_path_id or geometry.control_count:
+            return
+        if not self.path_editor.drawing or self.path_editor.geometry is not geometry:
+            self.path_editor.set_enabled(True)
+            self.path_editor.begin_geometry(geometry)
 
     def _discard_unfinished_path(self) -> None:
         """Remove a half-drawn slit before another New Slit command starts."""
@@ -1389,7 +1571,7 @@ class MainWindow(QMainWindow):
         region_type = selected_type or self._combo_value(self.region_panel.region_type)
         geometry = RegionGeometry(
             region_type,
-            name=self._next_marker_name("R", [item.name for item in self.regions]),
+            name=self._allocate_marker_name("R", [item.name for item in self.regions]),
         )
         geometry.display_color = REGION_COLORS[len(self.regions) % len(REGION_COLORS)]
         geometry.label_color = geometry.display_color
@@ -1420,7 +1602,7 @@ class MainWindow(QMainWindow):
         if self.dataset is None:
             self.statusBar().showMessage("请先加载图像。")
             return
-        name = f"R{len(self.regions) + 1}"
+        name = self._allocate_marker_name("R", [item.name for item in self.regions])
         dialog = ManualRegionDialog(
             name,
             lambda preview: self.image_canvas.set_regions(self.regions + [preview], preview.id),
@@ -1521,6 +1703,15 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"世界坐标区域不可用，已保留像素区域：{exc}")
         self._refresh_overlays()
         self.statusBar().showMessage(f"{geometry.name}: {geometry.description()}")
+        if geometry.id not in self._history_marker_ids and geometry.complete:
+            self._history_marker_ids.add(geometry.id)
+            self._record_history(
+                f"Region {geometry.name} ({geometry.region_type})",
+                main_tab=0,
+                left_tab=3,
+                marker_kind="region",
+                marker_id=geometry.id,
+            )
 
     def delete_active_region(self) -> None:
         active = self.active_region()
@@ -1578,6 +1769,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"已计算 {len(result.region_names)} 个区域的{result.statistic}时间变化。"
         )
+        self._record_history(
+            f"Region trend: {', '.join(result.region_names)}", main_tab=2, left_tab=3
+        )
 
     def calculate_region_histograms(self) -> None:
         if self.dataset is None:
@@ -1594,6 +1788,11 @@ class MainWindow(QMainWindow):
             self._full_region_result = result
             self._apply_region_result_visibility()
             self.main_tabs.setCurrentIndex(2)
+            self._record_history(
+                f"Region histogram: {', '.join(result.region_names)}",
+                main_tab=2,
+                left_tab=3,
+            )
         except Exception as exc:
             show_error(self, "无法计算区域直方图", str(exc))
 
@@ -1738,10 +1937,10 @@ class MainWindow(QMainWindow):
         for widget in widgets:
             widget.blockSignals(False)
 
-    def _path_settings_changed(self) -> None:
-        geometry = self.active_path()
-        if geometry is None:
-            return
+    def _apply_path_panel_settings(
+        self, geometry: PathGeometry, *, include_name: bool = True
+    ) -> None:
+        """Copy controls into one Slit without leaking a prior Slit's identity."""
         geometry.width = self.path_panel.width.value()
         geometry.width_unit = self.path_panel.width_unit.currentText()
         geometry.show_width_boundaries = self.path_panel.show_width.isChecked()
@@ -1753,8 +1952,8 @@ class MainWindow(QMainWindow):
         geometry.tracking_mode = self._combo_value(self.path_panel.tracking)
         geometry.sample_step_pixel = self.path_panel.step.value()
         geometry.smoothing = self.path_panel.smoothing.value()
-        new_name = self.path_panel.name.text().strip()
-        if new_name:
+        new_name = self.path_panel.name.text().strip() if include_name else ""
+        if include_name and new_name:
             geometry.name = new_name
             row = self.paths.index(geometry)
             item = self.path_panel.paths.item(row)
@@ -1771,6 +1970,12 @@ class MainWindow(QMainWindow):
         if geometry.coordinate_mode == "pixel" and geometry.tracking_mode == "world_fixed":
             geometry.tracking_mode = "pixel_fixed"
             self._set_combo_value(self.path_panel.tracking, "pixel_fixed")
+
+    def _path_settings_changed(self) -> None:
+        geometry = self.active_path()
+        if geometry is None:
+            return
+        self._apply_path_panel_settings(geometry)
         self._refresh_overlays()
 
     def _path_changed(self, geometry: PathGeometry) -> None:
@@ -1789,6 +1994,15 @@ class MainWindow(QMainWindow):
                 self._set_combo_value(self.path_panel.tracking, "pixel_fixed")
                 self.statusBar().showMessage(f"世界坐标切片不可用，已保留像素切片：{exc}")
         self._refresh_overlays()
+        if geometry.id not in self._history_marker_ids and geometry.complete:
+            self._history_marker_ids.add(geometry.id)
+            self._record_history(
+                f"Slit {geometry.name} ({geometry.path_type})",
+                main_tab=0,
+                left_tab=2,
+                marker_kind="slit",
+                marker_id=geometry.id,
+            )
 
     def delete_active_path(self) -> None:
         """Remove the selected path only; no source data are ever deleted."""
@@ -1818,6 +2032,9 @@ class MainWindow(QMainWindow):
         else:
             self.active_path_id = None
             self.path_editor.set_geometry(None)
+            self.path_panel.name.blockSignals(True)
+            self.path_panel.name.clear()
+            self.path_panel.name.blockSignals(False)
         self._refresh_overlays()
         self.statusBar().showMessage(f"已删除切片 {active.name}。")
 
@@ -1855,6 +2072,14 @@ class MainWindow(QMainWindow):
         self._redraw_td()
         self.main_tabs.setCurrentIndex(1)
         self.statusBar().showMessage(f"时距图已完成：{result.shape[0]} 个距离采样 × {result.shape[1]} 个时刻。")
+        slit = self.active_path()
+        self._record_history(
+            f"Time–Distance: {slit.name if slit is not None else 'Slit'}",
+            main_tab=1,
+            left_tab=2,
+            marker_kind="slit" if slit is not None else None,
+            marker_id=slit.id if slit is not None else None,
+        )
 
     def _td_failed(self, message: str, trace: str) -> None:
         LOG.error("TD worker failed: %s\n%s", message, trace)

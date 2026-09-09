@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import matplotlib.dates as mdates
+from matplotlib.backend_bases import MouseEvent
+from matplotlib.lines import Line2D
 from astropy.time import Time
 from PySide6.QtWidgets import QApplication
 
@@ -100,6 +102,54 @@ def test_td_zoom_updates_start_label_and_multiple_velocity_units() -> None:
     assert labels[0].get_color() != labels[1].get_color()
     assert all(item.get_bbox_patch().get_alpha() == 0.0 for item in labels)
     canvas.close()
+
+
+def test_slope_markers_have_no_endpoints_and_keep_individual_colors() -> None:
+    app = _application()
+    result = TDResult(
+        matrix=np.arange(12, dtype=float).reshape(3, 4),
+        times=Time(["2026-01-01T12:50:00", "2026-01-01T12:50:10", "2026-01-01T12:50:25", "2026-01-01T12:51:00"]),
+        frame_indices=np.arange(4), distance=np.array([0.0, 2.0, 4.0]),
+        distance_unit="arcsec", path_id="test", metadata={"path": {"name": "S1"}},
+    )
+    canvas = TimeDistanceCanvas()
+    canvas.show_result(result, true_time=True)
+    left, right = canvas.axes.get_xlim()
+    for points in (((0.2, 1.0), (0.8, 4.0)), ((0.25, 4.0), (0.75, 2.0))):
+        canvas.enable_slope_measurement(True)
+        for fraction, y in points:
+            canvas._on_press(
+                SimpleNamespace(
+                    inaxes=canvas.axes,
+                    xdata=left + fraction * (right - left),
+                    ydata=y,
+                )
+            )
+    slope_lines = [
+        item for item in canvas.axes.lines
+        if isinstance(item, Line2D) and item.get_gid() == "slope_measurement"
+    ]
+    assert len(slope_lines) == 2
+    assert all(item.get_marker() in {"None", "none", "", None} for item in slope_lines)
+
+    canvas.set_slope_style("#ffffff", 2.0, 10.0, auto_colors=False)
+    canvas.set_measurement_colors(1, line_color="#ff0000", text_color="#00ff00")
+    canvas.set_measurement_colors(2, line_color="#0000ff", text_color="#ffff00")
+    assert canvas.measurement_colors(1) == ("#ff0000", "#00ff00")
+    assert canvas.measurement_colors(2) == ("#0000ff", "#ffff00")
+
+    first = canvas._measurement_groups[0]
+    label = first["label"]
+    canvas.draw()
+    old_position = label.get_position()
+    x_pixel, y_pixel = canvas.axes.transData.transform(old_position)
+    canvas._on_press(MouseEvent("button_press_event", canvas, x_pixel, y_pixel, button=1))
+    target = (old_position[0], old_position[1] + 0.8)
+    target_x, target_y = canvas.axes.transData.transform(target)
+    canvas._on_motion(MouseEvent("motion_notify_event", canvas, target_x, target_y, button=1))
+    canvas._on_release(MouseEvent("button_release_event", canvas, target_x, target_y, button=1))
+    assert label.get_position()[1] > old_position[1] + 0.5
+    canvas.close(); app.processEvents()
 
 
 def test_filtered_figure_export_restores_live_artists(tmp_path: Path) -> None:

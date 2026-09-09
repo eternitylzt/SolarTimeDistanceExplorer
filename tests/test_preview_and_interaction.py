@@ -212,6 +212,62 @@ def test_slit_delete_state_stays_atomic_then_new_slit_draws(tmp_path) -> None:
     window.close(); app.processEvents()
 
 
+def test_slit_native_actions_delete_then_draw_unique_mixed_shapes(tmp_path) -> None:
+    """Exercise the QAction/QList signal route that previously cancelled New Slit."""
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
+    actions = {action.text(): action for action in window.path_panel.new.menu().actions()}
+
+    def canvas_press(x: float, y: float, button: MouseButton = MouseButton.LEFT) -> None:
+        window.image_canvas.mouse_pressed.emit(
+            SimpleNamespace(button=button, xdata=x, ydata=y, dblclick=False)
+        )
+        app.processEvents()
+
+    actions["Line"].trigger(); app.processEvents()
+    canvas_press(1.0, 1.0); canvas_press(7.0, 2.0)
+    actions["Polyline"].trigger(); app.processEvents()
+    canvas_press(1.0, 5.0); canvas_press(4.0, 6.0); canvas_press(7.0, 5.0)
+    canvas_press(7.0, 5.0, MouseButton.RIGHT)
+    assert [item.name for item in window.paths] == ["S1", "S2"]
+
+    window.path_panel.paths.setCurrentRow(0)
+    window.path_panel.delete.click(); app.processEvents()
+    actions["Smooth Curve"].trigger(); app.processEvents()
+    assert window.path_editor.drawing and window.path_editor.enabled
+    assert window.active_path() is window.path_editor.geometry
+    canvas_press(1.0, 3.0); canvas_press(4.0, 4.0); canvas_press(7.0, 3.0)
+    canvas_press(7.0, 3.0, MouseButton.RIGHT)
+
+    assert [item.name for item in window.paths] == ["S2", "S3"]
+    assert len({item.name for item in window.paths}) == len(window.paths)
+    assert window.paths[-1].path_type == "smooth" and window.paths[-1].complete
+    assert window.path_panel.paths.count() == len(window.paths)
+    window.close(); app.processEvents()
+
+
+def test_drawing_history_is_bounded_and_navigates_to_slit(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.history_limit = 3
+    window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
+    window.new_path("line")
+    for x, y in ((1.0, 1.0), (7.0, 2.0)):
+        window.image_canvas.mouse_pressed.emit(
+            SimpleNamespace(button=MouseButton.LEFT, xdata=x, ydata=y, dblclick=False)
+        )
+    slit_entry = next(item for item in window._history_entries if item["marker_kind"] == "slit")
+    window._record_history("Extra 1", main_tab=2, left_tab=3)
+    window._record_history("Extra 2", main_tab=1, left_tab=2)
+    assert len(window._history_entries) == 3
+    window._open_history_entry(slit_entry["id"])
+    assert window.main_tabs.currentIndex() == 0
+    assert window.left_tabs.currentIndex() == 2
+    assert window.active_path_id == window.paths[0].id
+    window.close(); app.processEvents()
+
+
 def test_scientific_width_shadow_can_be_toggled() -> None:
     app = QApplication.instance() or QApplication([])
     canvas = ImageCanvas()
