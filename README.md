@@ -10,7 +10,7 @@ without the GUI.
 Author: **Zhentong Li** — eternitylzt@gmail.com —
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Status: functional research preview (`0.8.0`). The core extraction algorithm,
+> Status: functional research preview (`0.8.1`). The core extraction algorithm,
 > FITS/SAV readers, Qt GUI, export, project files, tests, and Windows packaging
 > recipe are included. See [known limitations](#known-limitations) before using
 > a result in a publication.
@@ -41,6 +41,8 @@ and creates an onedir Windows build in `dist/SolarTimeDistanceExplorer/`.
   observation timestamps, and files are sorted by those timestamps. Irregular
   cadence is retained. Natural filename order is used only when no file has a
   usable observation time.
+  The status bar reports the current file and a determinate scan counter while
+  headers, timestamps, and WCS metadata are being indexed.
 * **3-D FITS cube**: AUTO examines `CTYPE`, `CUNIT`, and dimensions; users can
   override Axis 0/1/2 before use. Data are accessed using FITS memmap.
 * **SDO/AIA Level-1 FITS**: detected full-disk AIA Level-1 maps are registered
@@ -75,6 +77,8 @@ asks whether to use frame index or a supplied start time and cadence.
    Percentile, Min–Max and ZScale immediately updates the existing image artist;
    it does not reread FITS or repeat AIA preparation. Fixed normalization is the
    default for intensity-consistent movies.
+   The FPS value in Image → Animation updates the preview timer immediately,
+   including while playback is already running.
 4. Optionally select the magnifier in the image toolbar and drag a rectangle to
    zoom. Choose a reference frame, then select the shape directly from the New
    Slit drop-down. A line is completed with its second left-click; a polyline or
@@ -85,7 +89,10 @@ asks whether to use frame index or a supplied start time and cadence.
    deselect all handles while retaining checked publication overlays. Full
    instructions are under Help → Slit / Region Drawing Help.
 5. Set scientific slit width, integration statistic, interpolation, tracking,
-   and coordinate mode. **Show scientific width shadow** displays that sampling
+   and coordinate mode. World-coordinate storage and world-fixed tracking are
+   selected by default whenever valid WCS is available; exposure normalization
+   is opt-in per UI state and defaults on in a newly loaded dataset. **Show slit
+   width** displays that sampling
    width as a live semi-transparent band. Display line width remains independent.
 6. Click **Generate TD**. A worker thread keeps the UI responsive. The TD tab
    uses true timestamp bin edges (`pcolormesh`) by default, including irregular
@@ -105,6 +112,9 @@ Time–Distance, or Region Analysis tab. Its arrow menu can select one explicitl
 TD and region tabs also have their own save buttons and Matplotlib navigation
 toolbars. All text drawn inside scientific figures is English; Chinese is kept
 for workflow guidance and less obvious settings.
+Before selecting a filename, view export offers independent inclusion of axes,
+title, and colorbar plus a transparent figure background. The live canvas is
+restored after export.
 The Layout action on Image, Time–Distance, and Region toolbars applies persistent
 Left/Right/Top/Bottom/WSpace/HSpace values, even when the page originally used
 automatic constrained layout.
@@ -116,13 +126,20 @@ Each new marker receives a distinct palette colour; region trend and histogram
 curves use that same region colour.
 Settings → Memory cache frames changes the bounded 2–20 frame RAM cache and
 applies immediately to an open FITS folder; the default is 12.
+Opening a different dataset closes and clears the preceding RAM and prepared-AIA
+session cache automatically. Settings → Clear Current Data Cache provides the
+same release operation without restarting the program or closing the dataset.
 Settings controls whether checked Slit and Region overlays remain visible when
 switching the left-side analysis tab. TD tick labels offer fixed HH:MM:SS,
 HH:MM, full date-time, or a custom `strftime` pattern.
-Slope lines are annotated with velocity next to the selected ridge and expose
-line colour/width/style plus annotation size controls. TD title, both axis
+Slope lines are annotated as v₁, v₂, … next to the selected ridges and use
+distinct line/text colours by default. Their requested output unit may differ
+from the plotted distance unit when the WCS pixel scale supports the conversion;
+annotation background can be transparent. TD title, both axis
 labels, axis/tick sizes, grid, colorbar, aspect, colormap, stretch and range are
 configurable, and the x-axis title can optionally include the first timestamp.
+After zoom or pan, that optional start timestamp follows the left edge of the
+currently visible true-time interval.
 
 ## Closed-region analysis
 

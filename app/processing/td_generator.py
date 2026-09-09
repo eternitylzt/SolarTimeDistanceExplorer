@@ -15,7 +15,7 @@ from app.paths.base import PathGeometry
 from app.paths.geometry import sample_path_geometry
 from app.paths.sampling import sample_path_width
 from app.processing.preprocessing import FrameProcessor, IdentityProcessor
-from app.utils.units import convert_width_to_pixels, distance_along_path
+from app.utils.units import convert_width_to_pixels, distance_along_path, pixel_scale_arcsec
 from app.version import __version__
 
 
@@ -134,6 +134,7 @@ def generate_time_distance(
             "source_type": dataset.source_type,
             "path": path.to_dict(),
             "config": asdict(config),
+            "reference_pixel_scale_arcsec": pixel_scale_arcsec(reference_wcs),
             "matrix_convention": "TD[distance_index, time_index]",
             "software": f"Solar Time-Distance Explorer {__version__}",
         },

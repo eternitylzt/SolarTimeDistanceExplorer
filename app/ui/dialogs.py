@@ -101,6 +101,46 @@ class AnimationExportDialog(QDialog):
         }
 
 
+class ViewExportDialog(QDialog):
+    """Choose which publication annotations are retained in a saved view."""
+
+    def __init__(self, defaults: dict[str, object] | None = None, parent: object | None = None) -> None:
+        super().__init__(parent)
+        values = defaults or {}
+        self.setWindowTitle("保存当前视图设置")
+        layout = QFormLayout(self)
+        note = QLabel("默认保存当前视图中的全部信息；以下选项可以独立组合。")
+        note.setWordWrap(True)
+        layout.addRow(note)
+        self.include_axes = QCheckBox("Include axes, labels and ticks")
+        self.include_title = QCheckBox("Include title")
+        self.include_colorbar = QCheckBox("Include colorbar")
+        self.transparent = QCheckBox("Transparent figure background")
+        self.include_axes.setChecked(bool(values.get("include_axes", True)))
+        self.include_title.setChecked(bool(values.get("include_title", True)))
+        self.include_colorbar.setChecked(bool(values.get("include_colorbar", True)))
+        self.transparent.setChecked(bool(values.get("transparent", False)))
+        self.dpi = QSpinBox(); self.dpi.setRange(72, 1200)
+        self.dpi.setValue(int(values.get("dpi", 300))); self.dpi.setSuffix(" dpi")
+        layout.addRow(self.include_axes)
+        layout.addRow(self.include_title)
+        layout.addRow(self.include_colorbar)
+        layout.addRow(self.transparent)
+        layout.addRow("DPI", self.dpi)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def settings(self) -> dict[str, object]:
+        return {
+            "include_axes": self.include_axes.isChecked(),
+            "include_title": self.include_title.isChecked(),
+            "include_colorbar": self.include_colorbar.isChecked(),
+            "transparent": self.transparent.isChecked(),
+            "dpi": self.dpi.value(),
+        }
+
+
 class TimeAxisDialog(QDialog):
     """Require the user to confirm a cube axis when AUTO confidence is not high."""
 

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 from astropy.io import fits
 from matplotlib.backend_bases import MouseButton
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.data.fits_image import FitsImageDataset
@@ -46,6 +47,10 @@ def test_new_line_remains_in_drawing_mode_and_accepts_two_clicks(tmp_path) -> No
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
+    assert window.path_panel.coordinate_mode.currentData() == "world"
+    assert window.path_panel.tracking.currentData() == "world_fixed"
+    assert window.path_panel.distance_unit.currentText() == "arcsec"
+    assert window.path_panel.normalize_exposure.isChecked()
     window.path_panel.path_type.setCurrentText("line")
     window.new_path()
     assert window.path_editor.drawing
@@ -152,6 +157,58 @@ def test_slit_editor_recovers_after_region_workflow_and_blank_click_deselects(tm
     )
     assert window.active_path_id is None
     assert window.image_canvas.current_path is None
+    window.close(); app.processEvents()
+
+
+def test_slit_delete_state_stays_atomic_then_new_slit_draws(tmp_path) -> None:
+    """Regression: list, model, editor and canvas must share one selected Slit ID."""
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
+
+    for y in (2.0, 5.0):
+        window.new_path("line")
+        for x in (1.0, 6.0):
+            window.path_editor._press(
+                SimpleNamespace(button=MouseButton.LEFT, xdata=x, ydata=y, dblclick=False)
+            )
+    window.new_region("circle")
+    for x, y in ((3.0, 3.0), (4.0, 3.0)):
+        window.region_editor._press(
+            SimpleNamespace(button=MouseButton.LEFT, xdata=x, ydata=y, dblclick=False)
+        )
+    window.main_tabs.setCurrentIndex(2)
+    window.main_tabs.setCurrentIndex(0)
+    window.left_tabs.setCurrentIndex(2)
+
+    window.path_panel.paths.setCurrentRow(0)
+    window.active_path_id = "stale-id"  # emulate the former post-delete Qt row state
+    window.delete_active_path()
+    assert len(window.paths) == window.path_panel.paths.count() == 1
+    remaining_id = window.path_panel.paths.item(0).data(Qt.ItemDataRole.UserRole)
+    assert remaining_id == window.paths[0].id == window.active_path_id
+    assert window.path_editor.geometry is window.paths[0]
+
+    window.delete_active_path()
+    assert len(window.paths) == window.path_panel.paths.count() == 0
+    assert window.active_path_id is None and window.path_editor.geometry is None
+
+    window.new_path("polyline")
+    assert window.path_editor.drawing
+    assert window.path_panel.paths.item(0).data(Qt.ItemDataRole.UserRole) == window.active_path_id
+    for x, y in ((1.0, 1.0), (3.0, 6.0), (7.0, 4.0)):
+        window.path_editor._press(
+            SimpleNamespace(button=MouseButton.LEFT, xdata=x, ydata=y, dblclick=False)
+        )
+    window.path_editor._press(
+        SimpleNamespace(button=MouseButton.RIGHT, xdata=7.0, ydata=4.0, dblclick=False)
+    )
+    assert window.active_path() is not None and window.active_path().complete
+    assert window.image_panel.speed.value() == 5.0
+    window.image_panel.speed.setValue(12.5)
+    assert window._timer.interval() == 80
+    window.path_panel.label_background_transparent.setChecked(True)
+    assert window.active_path().label_background_color == "transparent"
     window.close(); app.processEvents()
 
 

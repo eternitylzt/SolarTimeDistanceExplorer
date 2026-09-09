@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QTimer, Qt
+from PySide6.QtCore import QEventLoop, QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
+    QApplication,
     QColorDialog,
     QDialog,
     QDoubleSpinBox,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QProgressDialog,
+    QProgressBar,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -61,6 +63,7 @@ from app.ui.dialogs import (
     ManualTimeDialog,
     PlotLayoutDialog,
     TimeAxisDialog,
+    ViewExportDialog,
     show_error,
 )
 from app.ui.image_plot import ImageCanvas
@@ -104,6 +107,7 @@ class MainWindow(QMainWindow):
         self._td_worker: TDWorker | None = None
         self._td_progress: QProgressDialog | None = None
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._advance_animation)
         self.settings = QSettings("SolarPhysics", "SolarTimeDistanceExplorer")
         self.keep_cross_tab_overlays = bool(self.settings.value("keep_cross_tab_overlays", False, type=bool))
@@ -119,6 +123,7 @@ class MainWindow(QMainWindow):
         self.path_panel = PathPanel()
         self.region_panel = RegionPanel()
         self.image_panel.changed.connect(self._reset_image_norm)
+        self.image_panel.speed.valueChanged.connect(self._animation_speed_changed)
         self.image_panel.export_clicked.connect(self.export_animation)
         self.dataset_panel.reference_changed.connect(self._reference_changed)
         self.path_panel.new_path.connect(self.new_path)
@@ -217,6 +222,7 @@ class MainWindow(QMainWindow):
         self.td_vmin.setMaximumWidth(125); self.td_vmax.setMaximumWidth(125)
         self.td_percentile_low = QDoubleSpinBox(); self.td_percentile_low.setRange(0, 99.999); self.td_percentile_low.setDecimals(3); self.td_percentile_low.setValue(1.0); self.td_percentile_low.setSuffix(" %")
         self.td_percentile_high = QDoubleSpinBox(); self.td_percentile_high.setRange(0.001, 100); self.td_percentile_high.setDecimals(3); self.td_percentile_high.setValue(99.0); self.td_percentile_high.setSuffix(" %")
+        self.td_percentile_low.setMaximumWidth(105); self.td_percentile_high.setMaximumWidth(105)
         self.true_time, _ = self._checkbox("True observational time", True)
         self.td_time_format, _ = self._combo([
             ("时:分:秒", "HH:MM:SS"), ("时:分", "HH:MM"),
@@ -241,16 +247,28 @@ class MainWindow(QMainWindow):
             control.editingFinished.connect(self._redraw_td)
         self.td_axis_label_size = QDoubleSpinBox(); self.td_axis_label_size.setRange(6, 36); self.td_axis_label_size.setValue(11); self.td_axis_label_size.setSuffix(" pt")
         self.td_tick_size = QDoubleSpinBox(); self.td_tick_size.setRange(6, 30); self.td_tick_size.setValue(9); self.td_tick_size.setSuffix(" pt")
+        self.td_axis_label_size.setMaximumWidth(90); self.td_tick_size.setMaximumWidth(90)
         self.td_include_start, _ = self._checkbox("横轴标题包含起始时间", False)
         self.td_grid, _ = self._checkbox("Grid", False)
         self.td_colorbar, _ = self._checkbox("Colorbar", True)
         self.td_aspect, _ = self._combo([("Auto", "auto"), ("Equal", "equal")])
         self.slope_color = QPushButton("#ffffff")
         self.slope_text_color = QPushButton("#ffffff")
+        self.slope_background = QPushButton("#000000")
+        self.slope_background_transparent, _ = self._checkbox("Transparent background", False)
+        self.slope_background_transparent.toggled.connect(self.slope_background.setDisabled)
+        self.slope_auto_colors, _ = self._checkbox("Auto colors", True)
+        self.slope_color.setDisabled(True); self.slope_text_color.setDisabled(True)
+        self.slope_velocity_unit, _ = self._combo([
+            ("Same as distance axis", "auto"), ("pixel/s", "pixel"),
+            ("arcsec/s", "arcsec"), ("km/s", "km"), ("Mm/s", "Mm"),
+        ])
         self.slope_width = QDoubleSpinBox(); self.slope_width.setRange(0.5, 8); self.slope_width.setValue(1.5)
         self.slope_linestyle, _ = self._combo([("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":")])
         self.slope_fontsize = QDoubleSpinBox(); self.slope_fontsize.setRange(6, 30); self.slope_fontsize.setValue(10); self.slope_fontsize.setSuffix(" pt")
         self.slope_precision = QSpinBox(); self.slope_precision.setRange(0, 6); self.slope_precision.setValue(1); self.slope_precision.setSuffix(" 位")
+        self.slope_width.setMaximumWidth(80); self.slope_fontsize.setMaximumWidth(90); self.slope_precision.setMaximumWidth(80)
+        self.slope_velocity_unit.setMaximumWidth(150)
         td_export = QPushButton("导出时距图")
         td_data = QPushButton("导出时距数据")
         slope = QPushButton("测量斜率/速度")
@@ -261,6 +279,7 @@ class MainWindow(QMainWindow):
         clear_slope.clicked.connect(self.td_canvas.clear_measurements)
         self.slope_color.clicked.connect(self._choose_slope_color)
         self.slope_text_color.clicked.connect(self._choose_slope_text_color)
+        self.slope_background.clicked.connect(self._choose_slope_background)
         for widget in (self.td_vmin, self.td_vmax, self.td_percentile_low, self.td_percentile_high, self.td_axis_label_size, self.td_tick_size):
             widget.valueChanged.connect(self._redraw_td)
         self.td_include_start.toggled.connect(self._redraw_td)
@@ -271,6 +290,9 @@ class MainWindow(QMainWindow):
         self.slope_linestyle.currentIndexChanged.connect(self._apply_slope_style)
         self.slope_fontsize.valueChanged.connect(self._apply_slope_style)
         self.slope_precision.valueChanged.connect(self._apply_slope_style)
+        self.slope_velocity_unit.currentIndexChanged.connect(self._apply_slope_style)
+        self.slope_background_transparent.toggled.connect(self._apply_slope_style)
+        self.slope_auto_colors.toggled.connect(self._slope_auto_colors_changed)
         td_controls.addWidget(QLabel("Colormap"))
         td_controls.addWidget(self.td_cmap)
         td_controls.addWidget(QLabel("Normalization"))
@@ -305,14 +327,24 @@ class MainWindow(QMainWindow):
         td_style.addStretch(1)
         td_layout.addLayout(td_style)
         slope_style = QHBoxLayout()
+        slope_style.addWidget(self.slope_auto_colors)
         slope_style.addWidget(QLabel("斜率线颜色")); slope_style.addWidget(self.slope_color)
         slope_style.addWidget(QLabel("线宽")); slope_style.addWidget(self.slope_width)
         slope_style.addWidget(QLabel("Line style")); slope_style.addWidget(self.slope_linestyle)
-        slope_style.addWidget(QLabel("标注颜色")); slope_style.addWidget(self.slope_text_color)
-        slope_style.addWidget(QLabel("标注字号")); slope_style.addWidget(self.slope_fontsize)
-        slope_style.addWidget(QLabel("速度小数位")); slope_style.addWidget(self.slope_precision)
         slope_style.addStretch(1)
         td_layout.addLayout(slope_style)
+        slope_annotation_style = QHBoxLayout()
+        slope_annotation_style.addWidget(QLabel("标注颜色")); slope_annotation_style.addWidget(self.slope_text_color)
+        slope_annotation_style.addWidget(QLabel("背景")); slope_annotation_style.addWidget(self.slope_background)
+        slope_annotation_style.addWidget(self.slope_background_transparent)
+        slope_annotation_style.addWidget(QLabel("标注字号")); slope_annotation_style.addWidget(self.slope_fontsize)
+        slope_annotation_style.addStretch(1)
+        td_layout.addLayout(slope_annotation_style)
+        slope_value_style = QHBoxLayout()
+        slope_value_style.addWidget(QLabel("速度单位")); slope_value_style.addWidget(self.slope_velocity_unit)
+        slope_value_style.addWidget(QLabel("小数位")); slope_value_style.addWidget(self.slope_precision)
+        slope_value_style.addStretch(1)
+        td_layout.addLayout(slope_value_style)
         td_actions = QHBoxLayout()
         td_actions.addWidget(slope); td_actions.addWidget(clear_slope)
         td_actions.addWidget(td_export); td_actions.addWidget(td_data); td_actions.addStretch(1)
@@ -345,6 +377,11 @@ class MainWindow(QMainWindow):
         self.region_tick_size = QDoubleSpinBox(); self.region_tick_size.setRange(6, 30); self.region_tick_size.setValue(9); self.region_tick_size.setSuffix(" pt")
         self.region_title_size = QDoubleSpinBox(); self.region_title_size.setRange(6, 36); self.region_title_size.setValue(12); self.region_title_size.setSuffix(" pt")
         self.region_legend_size = QDoubleSpinBox(); self.region_legend_size.setRange(6, 30); self.region_legend_size.setValue(12); self.region_legend_size.setSuffix(" pt")
+        for control in (
+            self.region_line_width, self.region_axis_label_size, self.region_tick_size,
+            self.region_title_size, self.region_legend_size,
+        ):
+            control.setMaximumWidth(90)
         self.region_sync_legend, _ = self._checkbox("Legend 与标题同字号", True)
         region_save = QPushButton("保存区域分析图…"); region_save.clicked.connect(self.export_region_figure)
         for label, control in (("时间刻度", self.region_time_format), ("Line style", self.region_line_style), ("Line width", self.region_line_width), ("Marker", self.region_marker)):
@@ -358,13 +395,17 @@ class MainWindow(QMainWindow):
         region_layout.addLayout(region_axes_style)
         region_font_style = QHBoxLayout()
         for label, control in (
-            ("Title size", self.region_title_size), ("坐标标题字号", self.region_axis_label_size),
-            ("刻度字号", self.region_tick_size), ("Legend size", self.region_legend_size),
+            ("Title size", self.region_title_size), ("Axis label size", self.region_axis_label_size),
+            ("Tick size", self.region_tick_size),
         ):
             region_font_style.addWidget(QLabel(label)); region_font_style.addWidget(control)
-        region_font_style.addWidget(self.region_sync_legend)
-        region_font_style.addWidget(region_save); region_font_style.addStretch(1)
+        region_font_style.addStretch(1)
         region_layout.addLayout(region_font_style)
+        region_legend_style = QHBoxLayout()
+        region_legend_style.addWidget(QLabel("Legend size")); region_legend_style.addWidget(self.region_legend_size)
+        region_legend_style.addWidget(self.region_sync_legend)
+        region_legend_style.addWidget(region_save); region_legend_style.addStretch(1)
+        region_layout.addLayout(region_legend_style)
         for control in (self.region_plot_title, self.region_x_label, self.region_y_label):
             control.editingFinished.connect(self._redraw_region)
         for control in (self.region_time_format, self.region_line_style, self.region_marker, self.region_x_scale, self.region_y_scale):
@@ -396,6 +437,11 @@ class MainWindow(QMainWindow):
         splitter.setCollapsible(1, False)
         splitter.setSizes([315, 1135])
         self.setCentralWidget(splitter)
+        self.load_progress = QProgressBar(self)
+        self.load_progress.setMinimumWidth(260)
+        self.load_progress.setTextVisible(True)
+        self.load_progress.hide()
+        self.statusBar().addPermanentWidget(self.load_progress)
         self.statusBar().showMessage("请打开单幅 FITS、FITS 文件夹/数据立方或 IDL SAV 数据。")
 
     @staticmethod
@@ -432,11 +478,22 @@ class MainWindow(QMainWindow):
         return control, None
 
     @staticmethod
-    def _marker_item(name: str, visible: bool) -> QListWidgetItem:
+    def _marker_item(name: str, visible: bool, marker_id: str | None = None) -> QListWidgetItem:
         item = QListWidgetItem(name)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable)
         item.setCheckState(Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
+        if marker_id is not None:
+            item.setData(Qt.ItemDataRole.UserRole, marker_id)
         return item
+
+    @staticmethod
+    def _next_marker_name(prefix: str, names: list[str]) -> str:
+        """Return the first unused S1/R1-style name after arbitrary deletions."""
+        used = set(names)
+        index = 1
+        while f"{prefix}{index}" in used:
+            index += 1
+        return f"{prefix}{index}"
 
     def _install_layout_action(self, toolbar: NavigationToolbar2QT, canvas: Any, key: str) -> None:
         """Replace Matplotlib's ineffective constrained-layout control and restore saved margins."""
@@ -562,24 +619,67 @@ class MainWindow(QMainWindow):
             10000,
         )
 
+    def clear_dataset_cache(self) -> None:
+        """Release decoded/AIA-prepared frames without closing the current dataset."""
+        if self.dataset is None:
+            self.statusBar().showMessage("当前没有可清除的数据缓存。")
+            return
+        self._timer.stop()
+        self.play_button.setText("▶ 播放")
+        self.dataset.clear_cache(include_disk=True)
+        self._fixed_norm = None
+        self.statusBar().showMessage(
+            "当前数据缓存已清除；已显示的帧仍保留，下一次访问其他帧时会重新读取/处理。",
+            10000,
+        )
+
+    def _folder_load_progress(self, current: int, total: int, filename: str) -> None:
+        """Render FITS header-scan progress in the status bar while excluding user input."""
+        self.load_progress.setRange(0, max(1, total))
+        self.load_progress.setValue(current)
+        self.load_progress.setFormat(f"FITS {current}/{total}")
+        self.load_progress.show()
+        self.statusBar().showMessage(f"正在读取 FITS 时间/WCS：{filename}")
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _set_load_stage(self, message: str) -> None:
+        self.load_progress.setRange(0, 0)
+        self.load_progress.setFormat(message)
+        self.load_progress.show()
+        self.statusBar().showMessage(message)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+    def _finish_load_progress(self) -> None:
+        self.load_progress.hide()
+        self.load_progress.setRange(0, 1)
+        self.load_progress.setValue(0)
+
     def _path_visibility_changed(self, row: int, checked: bool) -> None:
-        if 0 <= row < len(self.paths):
-            self.paths[row].visible = checked
-            item = self.path_panel.paths.item(row)
+        item = self.path_panel.paths.item(row)
+        marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        geometry = next((entry for entry in self.paths if entry.id == marker_id), None)
+        if geometry is None and 0 <= row < len(self.paths):
+            geometry = self.paths[row]
+        if geometry is not None:
+            geometry.visible = checked
             if item is not None and item.text().strip():
-                self.paths[row].name = item.text().strip()
-                if self.paths[row].id == self.active_path_id:
-                    self.path_panel.name.setText(self.paths[row].name)
+                geometry.name = item.text().strip()
+                if geometry.id == self.active_path_id:
+                    self.path_panel.name.setText(geometry.name)
             self._refresh_overlays()
 
     def _region_visibility_changed(self, row: int, checked: bool) -> None:
-        if 0 <= row < len(self.regions):
-            self.regions[row].visible = checked
-            item = self.region_panel.regions.item(row)
+        item = self.region_panel.regions.item(row)
+        marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        geometry = next((entry for entry in self.regions if entry.id == marker_id), None)
+        if geometry is None and 0 <= row < len(self.regions):
+            geometry = self.regions[row]
+        if geometry is not None:
+            geometry.visible = checked
             if item is not None and item.text().strip():
-                self.regions[row].name = item.text().strip()
-                if self.regions[row].id == self.active_region_id:
-                    self.region_panel.name.setText(self.regions[row].name)
+                geometry.name = item.text().strip()
+                if geometry.id == self.active_region_id:
+                    self.region_panel.name.setText(geometry.name)
             self._refresh_overlays()
             self._apply_region_result_visibility()
 
@@ -629,11 +729,12 @@ class MainWindow(QMainWindow):
             "region_background": "label_background_color",
         }[kind]
         previous = str(getattr(geometry, attribute))
-        color = QColorDialog.getColor(QColor(previous), self, "选择颜色")
+        panel = self.path_panel if is_slit else self.region_panel
+        initial = previous if previous.lower() != "transparent" else panel.label_background.text()
+        color = QColorDialog.getColor(QColor(initial), self, "选择颜色")
         if not color.isValid():
             return
         setattr(geometry, attribute, color.name())
-        panel = self.path_panel if is_slit else self.region_panel
         # A newly created marker uses one colour for its line and label. Keep
         # that relationship when the line is recoloured, but preserve an
         # independently customised label colour.
@@ -645,6 +746,11 @@ class MainWindow(QMainWindow):
             "label_color": panel.label_color,
             "label_background_color": panel.label_background,
         }[attribute]
+        if attribute == "label_background_color":
+            panel.label_background_transparent.blockSignals(True)
+            panel.label_background_transparent.setChecked(False)
+            panel.label_background_transparent.blockSignals(False)
+            panel.label_background.setEnabled(True)
         button.setText(color.name())
         if attribute == "label_background_color":
             lightness = color.lightness()
@@ -663,6 +769,10 @@ class MainWindow(QMainWindow):
         """Show a readable colour swatch on a marker-style button."""
         button.setText(value)
         if background:
+            if value.lower() == "transparent":
+                button.setText("#000000")
+                button.setStyleSheet("QPushButton { background-color: #000000; color: #ffffff; }")
+                return
             color = QColor(value)
             foreground = "#000000" if color.lightness() > 145 else "#ffffff"
             button.setStyleSheet(
@@ -688,11 +798,27 @@ class MainWindow(QMainWindow):
             self._set_color_button(self.slope_text_color, color.name())
             self._apply_slope_style()
 
+    def _choose_slope_background(self) -> None:
+        color = QColorDialog.getColor(
+            QColor(self.slope_background.text()), self, "选择速度标注背景颜色"
+        )
+        if color.isValid():
+            self._set_color_button(self.slope_background, color.name(), background=True)
+            self.slope_background_transparent.setChecked(False)
+            self._apply_slope_style()
+
+    def _slope_auto_colors_changed(self, checked: bool) -> None:
+        self.slope_color.setDisabled(checked)
+        self.slope_text_color.setDisabled(checked)
+        self._apply_slope_style()
+
     def _apply_slope_style(self) -> None:
         self.td_canvas.set_slope_style(
             self.slope_color.text(), self.slope_width.value(), self.slope_fontsize.value(),
             self._combo_value(self.slope_linestyle),
             self.slope_text_color.text(), self.slope_precision.value(),
+            "transparent" if self.slope_background_transparent.isChecked() else self.slope_background.text(),
+            self._combo_value(self.slope_velocity_unit), self.slope_auto_colors.isChecked(),
         )
 
     def _sync_region_legend_size(self, *_args: object) -> None:
@@ -716,14 +842,16 @@ class MainWindow(QMainWindow):
             self,
             "切片/区域绘制与科学参数说明",
             "【缩放与绘制】先用图像上方放大镜拖框放大；再关闭放大镜，或直接点击“新建切片/绘制新区域”（程序会自动退出缩放模式）。\n\n"
-            "【切片】点击“新建切片”右侧箭头并直接选择直线、折线或平滑曲线，形状立即作用于本次新建。程序会切回图像页并独占 Slit 鼠标事件。直线依次单击起点和终点后自动完成；折线/平滑曲线逐点单击，在原地双击或单击右键完成。完成后可拖动控制点和标签；在空白处左击可取消选择并隐藏控制点，已勾选线条仍保留，适合导出论文图。\n\n"
-            "【区域】点击“绘制新区域”并直接选择形状。圆形：单击圆心，移动鼠标预览，再单击确定半径。长方形：先单击一条边的两个端点，再移动并单击确定高度。多边形：逐点单击，在原地双击或单击右键闭合。空白处左击同样会取消选择。区域列表的勾选状态同时控制 Map、时间变化和当前帧直方图；未勾选区域不参与新计算。\n\n"
+            "【Slit】在 Slit Manager 最左侧点击“New Slit”并从下拉菜单直接选择 Line、Polyline 或 Smooth Curve。程序会切回图像页并独占 Slit 鼠标事件。直线依次单击起点和终点后自动完成；折线/平滑曲线逐点单击，在原地双击或单击右键完成。中间的 Delete Selected 只删除列表当前选中的 Slit，右侧 Help 打开本说明。完成后可拖动控制点和标签；在空白处左击可取消选择并隐藏控制点。标签背景可勾选 Transparent。\n\n"
+            "【Region】在 Region Manager 点击“New Region”并直接选择形状。圆形：单击圆心，移动鼠标预览，再单击确定半径。长方形：先单击一条边的两个端点，再移动并单击确定高度。多边形：逐点单击，在原地双击或单击右键闭合。区域标签背景同样可设为 Transparent。区域列表的勾选状态同时控制 Map、时间变化和当前帧直方图；未勾选区域不参与新计算。\n\n"
             "【切片坐标保存方式】“像素坐标”保存参考帧中的 x/y；“世界坐标/WCS”把切片保存为太阳物理坐标。它决定切片本身如何被记录。\n\n"
             "【逐帧跟踪方式】“固定像素位置”在每帧使用相同 x/y；“固定世界坐标”利用每帧 WCS 把同一太阳位置重新投影到像素，可适应 CRPIX/指向变化；“太阳自转跟踪”目前仍为实验功能。世界坐标保存通常应配合固定世界坐标跟踪。\n\n"
             "【时距图距离单位】只决定生成结果纵轴的累计弧长单位，可选 pixel、arcsec、km、Mm；不会改变切片保存或跟踪方式。km/Mm 仅在 WCS 与太阳距离足以可靠换算时可用。\n\n"
+            "【速度测量】每两次点击生成一组斜率，自动标为 v₁、v₂…并采用不同默认颜色。Velocity unit 可独立于 TD 纵轴选择 pixel/s、arcsec/s、km/s 或 Mm/s；涉及 pixel 的换算只在结果保存了可靠 WCS 像素尺度时可用。标注背景可设为 Transparent。\n\n"
             "【曲线平滑参数 s】仅用于平滑曲线。s=0 时样条经过控制点；s 越大，允许样条偏离控制点的平方残差越大，曲线通常越平滑。它不是像素宽度，也不是采样步长。建议先从 0 开始，小幅增加并观察预览。\n\n"
             "【Normalization】Percentile 按可设置的 Lower/Upper percentile 确定显示上下限（默认 1%/99%）；Manual 使用 vmin/vmax；Min–Max 使用当前数据极值；ZScale 使用天文图像常用的鲁棒线性范围。切换或修改参数会立即重绘，但不修改原数据。\n\n"
             "【动画导出】默认导出图像窗口当前显示的坐标范围；也可以改为完整图像。坐标轴、实际观测时间、标题、Colorbar、Slit 和 Region 均可分别选择是否写入每一帧。\n\n"
+            "【缓存与保存视图】打开新的数据源时会自动释放上一个数据集的内存与 AIA 临时缓存；也可用“设置 → 清除当前数据缓存”手动释放。保存当前视图时可独立选择是否包含坐标轴、标题和 Colorbar。\n\n"
             "【科学宽度阴影】勾选后，Map 上的半透明色带显示实际 Slit 宽度，并随数值/单位实时更新；它对应法向取样范围。显示线宽只改变中心线的屏幕粗细，两者完全独立。\n\n"
             "【绘图页布局】Image、Time–Distance 和 Region 工具栏中的“布局”用于设置 Left/Right/Top/Bottom/WSpace/HSpace。设置会立即应用并按页面保存；这些参数是画布边距/子图间距，不是数据网格刻度间隔。",
         )
@@ -760,6 +888,7 @@ class MainWindow(QMainWindow):
         self.keep_overlays_action.setChecked(self.keep_cross_tab_overlays)
         self.keep_overlays_action.toggled.connect(self._set_keep_overlays)
         self.cache_size_action = QAction("内存缓存帧数…", self, triggered=self.configure_cache_size)
+        self.clear_cache_action = QAction("清除当前数据缓存", self, triggered=self.clear_dataset_cache)
 
         for action, shortcut in (
             (self.new_path_action, "N"),
@@ -807,6 +936,7 @@ class MainWindow(QMainWindow):
         settings_menu = self.menuBar().addMenu("设置(&S)")
         settings_menu.addAction(self.keep_overlays_action)
         settings_menu.addAction(self.cache_size_action)
+        settings_menu.addAction(self.clear_cache_action)
         help_menu = self.menuBar().addMenu("帮助(&H)")
         help_menu.addActions([self.feature_help_action, self.drawing_help_action, self.about_action, self.log_action])
 
@@ -850,15 +980,23 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "打开 FITS 文件夹")
         if not folder:
             return
+        self._set_load_stage("正在准备 FITS 文件夹扫描…")
         try:
-            dataset = FitsFolderDataset(folder, cache_size=self.frame_cache_size)
+            dataset = FitsFolderDataset(
+                folder,
+                cache_size=self.frame_cache_size,
+                progress=self._folder_load_progress,
+            )
             if not self._confirm_or_configure_time(dataset):
                 return
+            self._set_load_stage("正在准备首帧图像与 WCS…")
             self._install_dataset(dataset)
             self._show_coordinate_notice(dataset)
         except Exception as exc:
             LOG.exception("Folder open failed")
             show_error(self, "无法打开 FITS 文件夹", str(exc))
+        finally:
+            self._finish_load_progress()
 
     def open_fits_cube(self) -> None:
         """Open a 3-D FITS cube and force a decision for low-confidence axes."""
@@ -1019,6 +1157,13 @@ class MainWindow(QMainWindow):
 
     def _install_dataset(self, dataset: TimeSeriesDataset) -> None:
         """Replace only source-specific state; paths/results do not leak across datasets."""
+        previous = self.dataset
+        previous_cache_cleared = previous is not None and previous is not dataset
+        if previous_cache_cleared:
+            try:
+                previous.close()
+            except Exception:
+                LOG.warning("Could not fully clear the previous dataset cache", exc_info=True)
         self.dataset = dataset
         self.current_frame = 0
         self.reference_frame = 0
@@ -1044,6 +1189,7 @@ class MainWindow(QMainWindow):
         self._set_combo_value(self.path_panel.coordinate_mode, "world" if world_available else "pixel")
         self._set_combo_value(self.path_panel.tracking, "world_fixed" if world_available else "pixel_fixed")
         self.path_panel.distance_unit.setCurrentText("arcsec" if world_available else "pixel")
+        self.path_panel.normalize_exposure.setChecked(True)
         self._set_combo_value(self.region_panel.coordinate_mode, "world" if world_available else "pixel")
         summary = dataset.summary()
         start = summary.start.isot if summary.start is not None else "未设置（帧序号）"
@@ -1073,7 +1219,10 @@ class MainWindow(QMainWindow):
             dataset.n_frames,
         )
         self.set_current_frame(0)
-        self.statusBar().showMessage(f"已从 {dataset.source} 加载 {dataset.n_frames} 帧")
+        cache_note = "；已清除上一数据集缓存" if previous_cache_cleared else ""
+        self.statusBar().showMessage(
+            f"已从 {dataset.source} 加载 {dataset.n_frames} 帧{cache_note}"
+        )
 
     def set_current_frame(self, index: int) -> None:
         """Render current source frame; only this one image needs RAM for a folder."""
@@ -1144,8 +1293,13 @@ class MainWindow(QMainWindow):
             self._timer.stop()
             self.play_button.setText("▶ 播放")
         else:
-            self._timer.start(max(1, int(1000 / self.image_panel.speed.value())))
+            self._animation_speed_changed(self.image_panel.speed.value())
+            self._timer.start()
             self.play_button.setText("⏸ 暂停")
+
+    def _animation_speed_changed(self, fps: float) -> None:
+        """Keep the live image preview timer synchronized with the Animation panel."""
+        self._timer.setInterval(max(1, round(1000.0 / max(float(fps), 0.01))))
 
     def _advance_animation(self) -> None:
         if self.dataset is None:
@@ -1171,13 +1325,18 @@ class MainWindow(QMainWindow):
                 "自定义函数是本版本预留的实验性 PathProvider 扩展接口。",
             )
             return
-        geometry = PathGeometry(path_type=path_type, name=f"S{len(self.paths) + 1}")
+        geometry = PathGeometry(
+            path_type=path_type,
+            name=self._next_marker_name("S", [item.name for item in self.paths]),
+        )
         geometry.display_color = SLIT_COLORS[len(self.paths) % len(SLIT_COLORS)]
         geometry.label_color = geometry.display_color
         self.paths.append(geometry)
         self.active_path_id = geometry.id
-        self.path_panel.paths.addItem(self._marker_item(geometry.name, geometry.visible))
+        self.path_panel.paths.blockSignals(True)
+        self.path_panel.paths.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
         self.path_panel.paths.setCurrentRow(len(self.paths) - 1)
+        self.path_panel.paths.blockSignals(False)
         self._path_settings_changed()
         # Selecting the new list item calls set_geometry(), which intentionally
         # exits drawing mode for ordinary selection. Enter drawing only after
@@ -1196,8 +1355,12 @@ class MainWindow(QMainWindow):
         if geometry in self.paths:
             row = self.paths.index(geometry)
             self.paths.remove(geometry)
+            self.path_panel.paths.blockSignals(True)
             self.path_panel.paths.takeItem(row)
+            self.path_panel.paths.blockSignals(False)
         self.active_path_id = None
+        self.path_editor.set_geometry(None)
+        self._refresh_overlays()
 
     def finish_active_drawing(self) -> None:
         """Route Enter to whichever scientific geometry is currently being drawn."""
@@ -1224,12 +1387,15 @@ class MainWindow(QMainWindow):
         self._deactivate_image_navigation()
         self.path_editor.set_geometry(None)
         region_type = selected_type or self._combo_value(self.region_panel.region_type)
-        geometry = RegionGeometry(region_type, name=f"R{len(self.regions) + 1}")
+        geometry = RegionGeometry(
+            region_type,
+            name=self._next_marker_name("R", [item.name for item in self.regions]),
+        )
         geometry.display_color = REGION_COLORS[len(self.regions) % len(REGION_COLORS)]
         geometry.label_color = geometry.display_color
         geometry.coordinate_mode = self._combo_value(self.region_panel.coordinate_mode)
         self.regions.append(geometry); self.active_region_id = geometry.id
-        self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible))
+        self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
         self.region_panel.regions.setCurrentRow(len(self.regions) - 1)
         self.image_canvas.set_regions(self.regions, geometry.id)
         self.region_editor.begin_geometry(geometry)
@@ -1270,7 +1436,7 @@ class MainWindow(QMainWindow):
             geometry.label_color = geometry.display_color
             geometry.coordinate_mode = self._combo_value(self.region_panel.coordinate_mode)
             self.regions.append(geometry); self.active_region_id = geometry.id
-            self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible))
+            self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
             self.region_panel.regions.setCurrentRow(len(self.regions) - 1)
             self._region_finished(geometry)
         except Exception as exc:
@@ -1280,10 +1446,15 @@ class MainWindow(QMainWindow):
         return next((item for item in self.regions if item.id == self.active_region_id), None)
 
     def _active_region_changed(self, row: int) -> None:
-        if not 0 <= row < len(self.regions):
+        item = self.region_panel.regions.item(row)
+        marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        geometry = next((entry for entry in self.regions if entry.id == marker_id), None)
+        if geometry is None and marker_id is None and 0 <= row < len(self.regions):
+            geometry = self.regions[row]
+        if geometry is None:
             self.active_region_id = None; self.region_editor.set_geometry(None)
         else:
-            geometry = self.regions[row]; self.active_region_id = geometry.id
+            self.active_region_id = geometry.id
             self.path_editor.set_enabled(False)
             self.region_editor.set_enabled(self.left_tabs.currentIndex() == 3)
             self.region_editor.set_geometry(geometry if self.region_editor.enabled else None)
@@ -1294,6 +1465,7 @@ class MainWindow(QMainWindow):
         widgets = (
             self.region_panel.name, self.region_panel.display_width,
             self.region_panel.show_label, self.region_panel.label_size,
+            self.region_panel.label_background_transparent,
         )
         for widget in widgets:
             widget.blockSignals(True)
@@ -1304,6 +1476,9 @@ class MainWindow(QMainWindow):
         self._set_color_button(self.region_panel.label_color, geometry.label_color)
         self._set_color_button(
             self.region_panel.label_background, geometry.label_background_color, background=True
+        )
+        self.region_panel.label_background_transparent.setChecked(
+            geometry.label_background_color.lower() == "transparent"
         )
         self.region_panel.label_size.setValue(geometry.label_fontsize)
         for widget in widgets:
@@ -1323,6 +1498,11 @@ class MainWindow(QMainWindow):
         geometry.display_linewidth = self.region_panel.display_width.value()
         geometry.show_label = self.region_panel.show_label.isChecked()
         geometry.label_fontsize = self.region_panel.label_size.value()
+        geometry.label_background_color = (
+            "transparent"
+            if self.region_panel.label_background_transparent.isChecked()
+            else self.region_panel.label_background.text()
+        )
         self._refresh_overlays()
 
     def _region_changed(self, geometry: RegionGeometry) -> None:
@@ -1345,10 +1525,25 @@ class MainWindow(QMainWindow):
     def delete_active_region(self) -> None:
         active = self.active_region()
         if active is None:
+            row = self.region_panel.regions.currentRow()
+            item = self.region_panel.regions.item(row)
+            marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            active = next((entry for entry in self.regions if entry.id == marker_id), None)
+        if active is None:
             return
-        row = self.regions.index(active); self.regions.remove(active); self.region_panel.regions.takeItem(row)
+        row = self.regions.index(active)
+        self.region_editor.set_geometry(None)
+        self.region_panel.regions.blockSignals(True)
+        self.regions.remove(active); self.region_panel.regions.takeItem(row)
+        next_row = min(row, len(self.regions) - 1)
+        self.region_panel.regions.setCurrentRow(next_row)
+        self.region_panel.regions.blockSignals(False)
         if self.regions:
-            self.region_panel.regions.setCurrentRow(max(0, row - 1))
+            selected = self.regions[next_row]
+            self.active_region_id = selected.id
+            self.region_editor.set_enabled(self.left_tabs.currentIndex() == 3)
+            self.region_editor.set_geometry(selected if self.region_editor.enabled else None)
+            self._load_region_settings(selected)
         else:
             self.active_region_id = None; self.region_editor.set_geometry(None)
         self._refresh_overlays()
@@ -1478,11 +1673,16 @@ class MainWindow(QMainWindow):
 
     def _active_path_changed(self, row: int) -> None:
         self.region_editor.set_enabled(False)
-        if not 0 <= row < len(self.paths):
+        item = self.path_panel.paths.item(row)
+        marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        geometry = next((entry for entry in self.paths if entry.id == marker_id), None)
+        if geometry is None and marker_id is None and 0 <= row < len(self.paths):
+            geometry = self.paths[row]
+        if geometry is None:
             self.active_path_id = None
             self.path_editor.set_geometry(None)
+            self._refresh_overlays()
             return
-        geometry = self.paths[row]
         self.active_path_id = geometry.id
         self.path_editor.set_enabled(self.left_tabs.currentIndex() == 2)
         self.path_editor.set_geometry(geometry if self.path_editor.enabled else None)
@@ -1506,6 +1706,7 @@ class MainWindow(QMainWindow):
             self.path_panel.display_width,
             self.path_panel.show_label,
             self.path_panel.label_size,
+            self.path_panel.label_background_transparent,
         )
         for widget in widgets:
             widget.blockSignals(True)
@@ -1529,6 +1730,9 @@ class MainWindow(QMainWindow):
         self._set_color_button(self.path_panel.label_color, geometry.label_color)
         self._set_color_button(
             self.path_panel.label_background, geometry.label_background_color, background=True
+        )
+        self.path_panel.label_background_transparent.setChecked(
+            geometry.label_background_color.lower() == "transparent"
         )
         self.path_panel.label_size.setValue(geometry.label_fontsize)
         for widget in widgets:
@@ -1559,6 +1763,11 @@ class MainWindow(QMainWindow):
         geometry.display_linewidth = self.path_panel.display_width.value()
         geometry.show_label = self.path_panel.show_label.isChecked()
         geometry.label_fontsize = self.path_panel.label_size.value()
+        geometry.label_background_color = (
+            "transparent"
+            if self.path_panel.label_background_transparent.isChecked()
+            else self.path_panel.label_background.text()
+        )
         if geometry.coordinate_mode == "pixel" and geometry.tracking_mode == "world_fixed":
             geometry.tracking_mode = "pixel_fixed"
             self._set_combo_value(self.path_panel.tracking, "pixel_fixed")
@@ -1585,16 +1794,32 @@ class MainWindow(QMainWindow):
         """Remove the selected path only; no source data are ever deleted."""
         active = self.active_path()
         if active is None:
+            row = self.path_panel.paths.currentRow()
+            item = self.path_panel.paths.item(row)
+            marker_id = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            active = next((entry for entry in self.paths if entry.id == marker_id), None)
+        if active is None:
+            self.statusBar().showMessage("请先在 Slit 列表中选择要删除的切片。")
             return
         row = self.paths.index(active)
+        self.path_editor.set_geometry(None)
+        self.path_panel.paths.blockSignals(True)
         self.paths.remove(active)
         self.path_panel.paths.takeItem(row)
+        next_row = min(row, len(self.paths) - 1)
+        self.path_panel.paths.setCurrentRow(next_row)
+        self.path_panel.paths.blockSignals(False)
         if self.paths:
-            self.path_panel.paths.setCurrentRow(max(0, row - 1))
+            selected = self.paths[next_row]
+            self.active_path_id = selected.id
+            self.path_editor.set_enabled(self.left_tabs.currentIndex() == 2)
+            self.path_editor.set_geometry(selected if self.path_editor.enabled else None)
+            self._load_path_settings(selected)
         else:
             self.active_path_id = None
             self.path_editor.set_geometry(None)
         self._refresh_overlays()
+        self.statusBar().showMessage(f"已删除切片 {active.name}。")
 
     def generate_td(self) -> None:
         """Dispatch expensive TD computation to QThread and provide cancellation."""
@@ -1692,9 +1917,40 @@ class MainWindow(QMainWindow):
         if 0 <= index < len(handlers):
             handlers[index]()
 
+    def _view_export_settings(self) -> dict[str, object] | None:
+        defaults = {
+            "include_axes": self.settings.value("view_export/include_axes", True, type=bool),
+            "include_title": self.settings.value("view_export/include_title", True, type=bool),
+            "include_colorbar": self.settings.value("view_export/include_colorbar", True, type=bool),
+            "transparent": self.settings.value("view_export/transparent", False, type=bool),
+            "dpi": int(self.settings.value("view_export/dpi", 300)),
+        }
+        dialog = ViewExportDialog(defaults, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        values = dialog.settings()
+        for key, value in values.items():
+            self.settings.setValue(f"view_export/{key}", value)
+        return values
+
+    def _export_canvas_figure(self, canvas: Any, path: str, options: dict[str, object]) -> None:
+        export_figure(
+            canvas.figure,
+            path,
+            dpi=int(options["dpi"]),
+            transparent=bool(options["transparent"]),
+            main_axes=canvas.axes,
+            include_axes=bool(options["include_axes"]),
+            include_title=bool(options["include_title"]),
+            include_colorbar=bool(options["include_colorbar"]),
+        )
+
     def save_current_frame(self) -> None:
         """Export the Map canvas at publication quality, never a GUI screenshot."""
         if self.dataset is None:
+            return
+        options = self._view_export_settings()
+        if options is None:
             return
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1706,7 +1962,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.image_canvas.set_full_resolution_display(True)
-            export_figure(self.image_canvas.figure, path, dpi=300)
+            self._export_canvas_figure(self.image_canvas, path, options)
             self.statusBar().showMessage(f"当前图像已保存：{path}")
         except Exception as exc:
             LOG.exception("Frame export failed")
@@ -1783,13 +2039,16 @@ class MainWindow(QMainWindow):
         """Export TD plot via Matplotlib, preserving PDF/SVG vector output."""
         if self.td_result is None:
             return
+        options = self._view_export_settings()
+        if options is None:
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "导出时距图", "time_distance.pdf", "PDF (*.pdf);;PNG (*.png);;EPS (*.eps);;SVG (*.svg);;TIFF (*.tiff *.tif)"
         )
         if not path:
             return
         try:
-            export_figure(self.td_canvas.figure, path, dpi=300)
+            self._export_canvas_figure(self.td_canvas, path, options)
             self.statusBar().showMessage(f"时距图已保存：{path}")
         except Exception as exc:
             LOG.exception("TD figure export failed")
@@ -1799,6 +2058,9 @@ class MainWindow(QMainWindow):
         """Export the latest region trend/histogram using its editable style."""
         if self.region_result is None:
             self.statusBar().showMessage("请先绘制区域时间变化或直方图。")
+            return
+        options = self._view_export_settings()
+        if options is None:
             return
         names = "_".join(
             re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("_") or f"R{index + 1}"
@@ -1814,7 +2076,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            export_figure(self.region_canvas.figure, path, dpi=300)
+            self._export_canvas_figure(self.region_canvas, path, options)
             self.statusBar().showMessage(f"区域分析图已保存：{path}")
         except Exception as exc:
             LOG.exception("Region figure export failed")
@@ -1892,10 +2154,10 @@ class MainWindow(QMainWindow):
             self.regions = [RegionGeometry.from_dict(item) for item in payload.get("regions", [])]
             self.path_panel.paths.clear()
             for geometry in self.paths:
-                self.path_panel.paths.addItem(self._marker_item(geometry.name, geometry.visible))
+                self.path_panel.paths.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
             self.region_panel.regions.clear()
             for geometry in self.regions:
-                self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible))
+                self.region_panel.regions.addItem(self._marker_item(geometry.name, geometry.visible, geometry.id))
             if self.regions:
                 self.active_region_id = self.regions[0].id
                 self.region_panel.regions.setCurrentRow(0)
@@ -1927,6 +2189,7 @@ class MainWindow(QMainWindow):
             "percentile_low": self.image_panel.percentile_low.value(),
             "percentile_high": self.image_panel.percentile_high.value(),
             "fixed": self.image_panel.fixed.isChecked(),
+            "preview_fps": self.image_panel.speed.value(),
         }
 
     def _td_settings(self) -> dict[str, Any]:
@@ -1955,6 +2218,10 @@ class MainWindow(QMainWindow):
             "slope_linestyle": self._combo_value(self.slope_linestyle),
             "slope_fontsize": self.slope_fontsize.value(),
             "slope_text_color": self.slope_text_color.text(),
+            "slope_background": self.slope_background.text(),
+            "slope_background_transparent": self.slope_background_transparent.isChecked(),
+            "slope_velocity_unit": self._combo_value(self.slope_velocity_unit),
+            "slope_auto_colors": self.slope_auto_colors.isChecked(),
             "slope_precision": self.slope_precision.value(),
             "region_plot": {
                 "time_format": self._combo_value(self.region_time_format),
@@ -1988,6 +2255,7 @@ class MainWindow(QMainWindow):
         self.image_panel.percentile_low.setValue(float(settings.get("percentile_low", 1.0)))
         self.image_panel.percentile_high.setValue(float(settings.get("percentile_high", 99.0)))
         self.image_panel.fixed.setChecked(bool(settings.get("fixed", True)))
+        self.image_panel.speed.setValue(float(settings.get("preview_fps", 5.0)))
         self.image_panel._range_mode_changed()
         self._reset_image_norm()
 
@@ -2019,6 +2287,15 @@ class MainWindow(QMainWindow):
         self.slope_fontsize.setValue(float(settings.get("slope_fontsize", 10.0)))
         slope_text_color = str(settings.get("slope_text_color", slope_color))
         self._set_color_button(self.slope_text_color, slope_text_color)
+        slope_background = str(settings.get("slope_background", "#000000"))
+        self._set_color_button(self.slope_background, slope_background, background=True)
+        self.slope_background_transparent.setChecked(
+            bool(settings.get("slope_background_transparent", False))
+        )
+        self._set_combo_value(
+            self.slope_velocity_unit, str(settings.get("slope_velocity_unit", "auto"))
+        )
+        self.slope_auto_colors.setChecked(bool(settings.get("slope_auto_colors", True)))
         self.slope_precision.setValue(int(settings.get("slope_precision", 1)))
         region = settings.get("region_plot", {})
         self._set_combo_value(self.region_time_format, region.get("time_format", "HH:MM:SS"))

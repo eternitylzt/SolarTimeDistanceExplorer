@@ -48,13 +48,15 @@ def test_pdf_backend_time_format_and_slope_clear(tmp_path: Path) -> None:
     canvas.clear_measurements()
     assert canvas._measurement_artists == []
     canvas.enable_slope_measurement(True)
-    canvas.set_slope_style("#ff0000", 2.0, 13.0, "--", "#00ff00", 2)
+    canvas.set_slope_style(
+        "#ff0000", 2.0, 13.0, "--", "#00ff00", 2, auto_colors=False
+    )
     x1, x2 = mdates.date2num(result.times.to_datetime()[[0, 2]])
     canvas._on_press(SimpleNamespace(inaxes=canvas.axes, xdata=x1, ydata=0.25))
     canvas._on_press(SimpleNamespace(inaxes=canvas.axes, xdata=x2, ydata=1.75))
     assert any(item.get_gid() == "slope_measurement" for item in canvas.axes.texts)
-    assert any("v =" in item.get_text() for item in canvas.axes.texts)
-    annotation = next(item for item in canvas.axes.texts if "v =" in item.get_text())
+    assert any("v_{1}" in item.get_text() for item in canvas.axes.texts)
+    annotation = next(item for item in canvas.axes.texts if "v_{1}" in item.get_text())
     assert annotation.get_color() == "#00ff00"
     assert annotation.get_fontsize() == 13.0
     assert "0.06" in annotation.get_text()
@@ -67,6 +69,59 @@ def test_pdf_backend_time_format_and_slope_clear(tmp_path: Path) -> None:
     eps = tmp_path / "td.eps"
     export_figure(canvas.figure, eps)
     assert eps.read_bytes().startswith(b"%!PS-Adobe")
+
+
+def test_td_zoom_updates_start_label_and_multiple_velocity_units() -> None:
+    _application()
+    result = TDResult(
+        matrix=np.arange(12, dtype=float).reshape(3, 4),
+        times=Time(["2026-01-01T12:50:00", "2026-01-01T12:50:10", "2026-01-01T12:50:25", "2026-01-01T12:51:00"]),
+        frame_indices=np.arange(4), distance=np.array([0.0, 1.0, 2.0]),
+        distance_unit="arcsec", path_id="test",
+        metadata={"path": {"name": "S1"}, "reference_pixel_scale_arcsec": 0.6},
+    )
+    canvas = TimeDistanceCanvas()
+    canvas.show_result(result, include_start_time=True)
+    x = mdates.date2num(result.times.to_datetime())
+    canvas.axes.set_xlim(x[1], x[3])
+    assert "2026-01-01T12:50:10" in canvas.axes.get_xlabel()
+
+    canvas.set_slope_style(
+        "#ffffff", 1.5, 10.0, "-", "#ffffff", 1,
+        "transparent", "km", True,
+    )
+    for first, second in (((x[0], 0.0), (x[1], 1.0)), ((x[1], 0.5), (x[2], 2.0))):
+        canvas.enable_slope_measurement(True)
+        canvas._on_press(SimpleNamespace(inaxes=canvas.axes, xdata=first[0], ydata=first[1]))
+        canvas._on_press(SimpleNamespace(inaxes=canvas.axes, xdata=second[0], ydata=second[1]))
+    labels = [item for item in canvas.axes.texts if item.get_gid() == "slope_measurement"]
+    assert any("v_{1}" in item.get_text() and "km/s" in item.get_text() for item in labels)
+    assert any("v_{2}" in item.get_text() and "km/s" in item.get_text() for item in labels)
+    assert labels[0].get_color() != labels[1].get_color()
+    assert all(item.get_bbox_patch().get_alpha() == 0.0 for item in labels)
+    canvas.close()
+
+
+def test_filtered_figure_export_restores_live_artists(tmp_path: Path) -> None:
+    _application()
+    canvas = TimeDistanceCanvas()
+    result = TDResult(
+        matrix=np.arange(6, dtype=float).reshape(2, 3), times=None,
+        frame_indices=np.arange(3), distance=np.array([0.0, 1.0]),
+        distance_unit="pixel", path_id="test", metadata={"path": {"name": "S1"}},
+    )
+    canvas.show_result(result, title="Keep me", show_colorbar=True)
+    colorbar_axes = canvas.figure.axes[1]
+    output = tmp_path / "filtered.png"
+    export_figure(
+        canvas.figure, output, main_axes=canvas.axes,
+        include_axes=False, include_title=False, include_colorbar=False,
+    )
+    assert output.stat().st_size > 100
+    assert canvas.axes.axison
+    assert canvas.axes.title.get_visible()
+    assert colorbar_axes.get_visible() and colorbar_axes.get_in_layout()
+    canvas.close()
 
 
 def test_image_display_range_controls_redraw_immediately() -> None:

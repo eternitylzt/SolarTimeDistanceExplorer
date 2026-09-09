@@ -69,6 +69,13 @@ class TimeSeriesDataset(ABC):
         """Optionally return a SunPy Map. Generic readers return None by default."""
         return None
 
+    def clear_cache(self, *, include_disk: bool = True) -> None:
+        """Release optional derived-frame caches; generic datasets have none."""
+
+    def close(self) -> None:
+        """Release optional source resources before another dataset is installed."""
+        self.clear_cache(include_disk=True)
+
     def set_times(self, times: Time | None) -> None:
         """Apply a user-confirmed manual time configuration."""
         if times is not None and len(times) != self.n_frames:

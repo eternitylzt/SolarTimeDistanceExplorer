@@ -204,15 +204,13 @@ class ImageCanvas(FigureCanvasQTAgg):
         return norm
 
     def set_path(self, geometry: PathGeometry | None) -> None:
-        """Set active path and redraw centerline/control handles without data mutation."""
+        """Set the active editor path without mutating the manager-owned path list."""
         self.current_path = geometry
         if geometry is not None:
             for index, item in enumerate(self.paths):
                 if item.id == geometry.id:
                     self.paths[index] = geometry
                     break
-            else:
-                self.paths.append(geometry)
         self._draw_paths()
         self.draw_idle()
 
@@ -271,6 +269,7 @@ class ImageCanvas(FigureCanvasQTAgg):
                                        markeredgecolor="black", markersize=6, zorder=22)
                     )
             if geometry.show_label and geometry.complete:
+                transparent = geometry.label_background_color.lower() == "transparent"
                 position = geometry.label_position_pixel
                 if position is None:
                     outline = geometry.outline_points()
@@ -279,7 +278,11 @@ class ImageCanvas(FigureCanvasQTAgg):
                     self.axes.text(
                         position[0], position[1], geometry.name, color=geometry.label_color,
                         fontsize=geometry.label_fontsize, fontweight="bold", zorder=23,
-                        bbox={"facecolor": geometry.label_background_color, "alpha": 0.65, "edgecolor": "none", "pad": 1.5},
+                        bbox={
+                            "facecolor": "none" if transparent else geometry.label_background_color,
+                            "alpha": 0.0 if transparent else 0.65,
+                            "edgecolor": "none", "pad": 1.5,
+                        },
                     )
                 )
 
@@ -331,6 +334,7 @@ class ImageCanvas(FigureCanvasQTAgg):
         )
         self._path_artists.extend(line)
         if geometry.show_label:
+            transparent = geometry.label_background_color.lower() == "transparent"
             position = geometry.label_position_pixel
             if position is None:
                 position = (float(samples[0, 0] + 5.0), float(samples[0, 1] + 5.0))
@@ -338,7 +342,11 @@ class ImageCanvas(FigureCanvasQTAgg):
                 self.axes.text(
                     position[0], position[1], geometry.name, color=geometry.label_color,
                     fontsize=geometry.label_fontsize, fontweight="bold", zorder=22,
-                    bbox={"facecolor": geometry.label_background_color, "alpha": 0.65, "edgecolor": "none", "pad": 1.5},
+                    bbox={
+                        "facecolor": "none" if transparent else geometry.label_background_color,
+                        "alpha": 0.0 if transparent else 0.65,
+                        "edgecolor": "none", "pad": 1.5,
+                    },
                 )
             )
         if geometry.show_width_boundaries:

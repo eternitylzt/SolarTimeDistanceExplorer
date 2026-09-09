@@ -11,6 +11,48 @@ SOLAR_RADIUS_KM = 695_700.0
 SOLAR_ANGULAR_RADIUS_ARCSEC = 959.63
 
 
+def convert_distance_value(
+    value: float,
+    source_unit: str,
+    target_unit: str,
+    *,
+    pixel_scale_arcsec_value: float | None = None,
+) -> float:
+    """Convert one signed projected distance for slope/velocity reporting.
+
+    Pixel conversion is accepted only when the TD result retained a defensible
+    WCS pixel scale.  Angular-to-linear conversion uses the same nominal solar
+    radius convention as the TD distance-axis engine, keeping plotted and
+    measured values reproducible.
+    """
+    if source_unit == target_unit:
+        return float(value)
+    if source_unit == "pixel":
+        if pixel_scale_arcsec_value is None:
+            raise ValueError("Pixel conversion requires a reliable WCS pixel scale.")
+        arcsec = float(value) * pixel_scale_arcsec_value
+    elif source_unit == "arcsec":
+        arcsec = float(value)
+    elif source_unit == "km":
+        arcsec = float(value) / SOLAR_RADIUS_KM * SOLAR_ANGULAR_RADIUS_ARCSEC
+    elif source_unit == "Mm":
+        arcsec = float(value) * 1_000.0 / SOLAR_RADIUS_KM * SOLAR_ANGULAR_RADIUS_ARCSEC
+    else:
+        raise ValueError(f"Unsupported distance unit: {source_unit}")
+
+    if target_unit == "arcsec":
+        return arcsec
+    if target_unit == "km":
+        return arcsec / SOLAR_ANGULAR_RADIUS_ARCSEC * SOLAR_RADIUS_KM
+    if target_unit == "Mm":
+        return arcsec / SOLAR_ANGULAR_RADIUS_ARCSEC * (SOLAR_RADIUS_KM / 1_000.0)
+    if target_unit == "pixel":
+        if pixel_scale_arcsec_value is None:
+            raise ValueError("Pixel conversion requires a reliable WCS pixel scale.")
+        return arcsec / pixel_scale_arcsec_value
+    raise ValueError(f"Unsupported distance unit: {target_unit}")
+
+
 def pixel_scale_arcsec(wcs: WCS | None) -> float | None:
     """Estimate geometric-mean angular pixel scale in arcsec/pixel.
 

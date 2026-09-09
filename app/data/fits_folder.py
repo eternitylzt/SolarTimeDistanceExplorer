@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from astropy.time import Time
@@ -33,14 +33,23 @@ class FitsFolderDataset(TimeSeriesDataset):
 
     source_type = "fits_folder"
 
-    def __init__(self, directory: str | Path, cache_size: int = 12, prepare_aia: bool = True) -> None:
+    def __init__(
+        self,
+        directory: str | Path,
+        cache_size: int = 12,
+        prepare_aia: bool = True,
+        progress: Callable[[int, int, str], None] | None = None,
+    ) -> None:
         directory = Path(directory)
-        files = [path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in FITS_SUFFIXES]
+        files = sorted(
+            (path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in FITS_SUFFIXES),
+            key=natural_key,
+        )
         if not files:
             raise ValueError("The selected folder contains no .fits, .fit, or .fts files.")
 
         scanned: list[tuple[Path, int, FrameMetadata]] = []
-        for path in files:
+        for scan_index, path in enumerate(files, start=1):
             try:
                 hdu, header, shape = first_image_header(path)
                 if len(shape) != 2:
@@ -57,6 +66,9 @@ class FitsFolderDataset(TimeSeriesDataset):
                 scanned.append((path, hdu, metadata))
             except Exception:
                 LOG.exception("Cannot scan FITS header: %s", path)
+            finally:
+                if progress is not None:
+                    progress(scan_index, len(files), path.name)
 
         if not scanned:
             raise ValueError("No readable two-dimensional FITS images were found.")
@@ -190,6 +202,25 @@ class FitsFolderDataset(TimeSeriesDataset):
         """Resize raw/prepared in-memory LRUs without discarding disk prep cache."""
         self._cache.resize(size)
         self._map_cache.resize(size)
+
+    def clear_cache(self, *, include_disk: bool = True) -> None:
+        """Release decoded/prepared frames and optionally reset the session prep store."""
+        self._cache.clear()
+        self._map_cache.clear()
+        self._wcs_cache.clear()
+        if include_disk:
+            self._aia_cache_dir.cleanup()
+            self._aia_cache_dir = TemporaryDirectory(prefix="stde_aia_prepared_")
+            self._aia_prepared_indices.clear()
+            self.aia_prepared = False
+
+    def close(self) -> None:
+        """Release all temporary data owned by this source."""
+        self._cache.clear()
+        self._map_cache.clear()
+        self._wcs_cache.clear()
+        self._aia_prepared_indices.clear()
+        self._aia_cache_dir.cleanup()
 
     def _validate_index(self, index: int) -> None:
         if not 0 <= index < self.n_frames:

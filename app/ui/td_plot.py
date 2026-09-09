@@ -14,6 +14,10 @@ from PySide6.QtCore import Signal, Qt
 from app.plotting.normalization import make_norm
 from app.processing.td_generator import TDResult
 from app.processing.time_edges import centers_to_edges
+from app.utils.units import convert_distance_value
+
+
+SLOPE_COLORS = ("#ffcc33", "#00d4ff", "#ff5c8a", "#66e36f", "#b388ff", "#ff8c42")
 
 
 class TimeDistanceCanvas(FigureCanvasQTAgg):
@@ -29,12 +33,21 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self._measure_mode = False
         self._measure_points: list[tuple[float, float]] = []
         self._measurement_artists: list[Any] = []
+        self._measurement_groups: list[dict[str, Any]] = []
+        self._pending_artists: list[Any] = []
+        self._pending_color: str | None = None
         self.slope_color = "#ffffff"
         self.slope_linewidth = 1.5
         self.slope_linestyle = "-"
         self.slope_fontsize = 10.0
         self.slope_text_color = "#ffffff"
+        self.slope_background_color = "#000000"
+        self.slope_velocity_unit = "auto"
+        self.slope_auto_colors = True
         self.slope_precision = 1
+        self._true_time = True
+        self._include_start_time = False
+        self._base_x_label = "Observation Time [UTC]"
         self.mpl_connect("button_press_event", self._on_press)
 
     def show_result(
@@ -61,6 +74,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
     ) -> None:
         """Render distance by time without making irregular cadence uniform."""
         self.result = result
+        self._true_time = bool(true_time and result.times is not None)
+        self._include_start_time = bool(include_start_time)
         self.figure.clear()
         self.axes = self.figure.add_subplot(111)
         distance_edges = centers_to_edges(result.distance)
@@ -68,8 +83,6 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             time_centers = mdates.date2num(result.times.to_datetime())
             time_edges = centers_to_edges(time_centers)
             default_x_label = "Observation Time [UTC]"
-            if include_start_time:
-                default_x_label += f" (Start: {result.times[0].utc.isot})"
         else:
             time_edges = centers_to_edges(result.frame_indices.astype(float))
             default_x_label = "Frame Index"
@@ -92,7 +105,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             rasterized=True,
         )
         self.axes.set_title(title)
-        self.axes.set_xlabel(x_label.strip() or default_x_label, fontsize=axis_label_size)
+        self._base_x_label = x_label.strip() or default_x_label
+        self.axes.set_xlabel(self._base_x_label, fontsize=axis_label_size)
         self.axes.set_ylabel(
             y_label.strip() or f"Distance Along Slit [{result.distance_unit}]",
             fontsize=axis_label_size,
@@ -114,11 +128,40 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self.axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
         self.axes.minorticks_on()
         self._measurement_artists.clear()
+        self._measurement_groups.clear()
+        self._pending_artists.clear()
+        self._pending_color = None
         self._measure_points.clear()
+        if self._true_time:
+            self.axes.callbacks.connect("xlim_changed", self._time_xlim_changed)
+            self._update_time_xlabel()
         self.draw_idle()
+
+    def _time_xlim_changed(self, _axes: Any) -> None:
+        """Keep the optional Start timestamp synchronized with interactive zoom/pan."""
+        self._update_time_xlabel()
+        self.draw_idle()
+
+    def _update_time_xlabel(self) -> None:
+        label = self._base_x_label
+        if self._include_start_time and self._true_time:
+            left = min(self.axes.get_xlim())
+            timestamp = mdates.num2date(left, tz=mdates.UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")
+            label += f" (Start: {timestamp[:-3]})"
+        self.axes.set_xlabel(label)
 
     def enable_slope_measurement(self, enabled: bool) -> None:
         """Enter two-click slope mode while leaving the TD image unchanged."""
+        if self._measure_points:
+            for artist in self._pending_artists:
+                try:
+                    artist.remove()
+                except (ValueError, AttributeError):
+                    pass
+                if artist in self._measurement_artists:
+                    self._measurement_artists.remove(artist)
+            self._pending_artists.clear()
+            self._pending_color = None
         self._measure_mode = enabled
         self._measure_points.clear()
         if enabled:
@@ -134,25 +177,48 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         linestyle: str = "-",
         text_color: str | None = None,
         precision: int = 1,
+        background_color: str = "#000000",
+        velocity_unit: str = "auto",
+        auto_colors: bool = True,
     ) -> None:
         self.slope_color = color
         self.slope_linewidth = linewidth
         self.slope_fontsize = fontsize
         self.slope_linestyle = linestyle
         self.slope_text_color = text_color or color
+        self.slope_background_color = background_color
+        self.slope_velocity_unit = velocity_unit
+        self.slope_auto_colors = auto_colors
         self.slope_precision = max(0, int(precision))
-        for artist in self._measurement_artists:
+        for group in self._measurement_groups:
+            self._style_measurement_group(group)
+        pending_color = self._measurement_color(len(self._measurement_groups) + 1)
+        for artist in self._pending_artists:
+            if isinstance(artist, Line2D):
+                artist.set_color(pending_color)
+        self.draw_idle()
+
+    def _measurement_color(self, index: int) -> str:
+        return SLOPE_COLORS[(index - 1) % len(SLOPE_COLORS)] if self.slope_auto_colors else self.slope_color
+
+    def _style_measurement_group(self, group: dict[str, Any]) -> None:
+        color = self._measurement_color(int(group["index"]))
+        text_color = color if self.slope_auto_colors else self.slope_text_color
+        for artist in group["artists"]:
             if isinstance(artist, Text):
-                artist.set_color(self.slope_text_color)
-                artist.set_fontsize(fontsize)
+                artist.set_color(text_color)
+                artist.set_fontsize(self.slope_fontsize)
+                artist.set_text(self._velocity_text(group["delta_s"], group["delta_t"], group["index"]))
                 patch = artist.get_bbox_patch()
                 if patch is not None:
+                    transparent = self.slope_background_color.lower() == "transparent"
+                    patch.set_facecolor("none" if transparent else self.slope_background_color)
+                    patch.set_alpha(0.0 if transparent else 0.55)
                     patch.set_edgecolor(color)
             elif isinstance(artist, Line2D):
                 artist.set_color(color)
-                artist.set_linewidth(linewidth)
-                artist.set_linestyle(linestyle)
-        self.draw_idle()
+                artist.set_linewidth(self.slope_linewidth)
+                artist.set_linestyle(self.slope_linestyle)
 
     def clear_measurements(self) -> None:
         """Reliably remove all tagged slope artists from every current axes."""
@@ -172,6 +238,9 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             except (ValueError, AttributeError, NotImplementedError):
                 pass
         self._measurement_artists.clear()
+        self._measurement_groups.clear()
+        self._pending_artists.clear()
+        self._pending_color = None
         self._measure_points.clear()
         self._measure_mode = False
         self.unsetCursor()
@@ -183,52 +252,79 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         if event.xdata is None or event.ydata is None:
             return
         self._measure_points.append((float(event.xdata), float(event.ydata)))
+        measurement_index = len(self._measurement_groups) + 1
+        color = self._pending_color or self._measurement_color(measurement_index)
+        self._pending_color = color
         points = self.axes.plot(
-            event.xdata, event.ydata, "o", color=self.slope_color, markeredgecolor="black"
+            event.xdata, event.ydata, "o", color=color, markeredgecolor="black"
         )
         for artist in points:
             artist.set_gid("slope_measurement")
         self._measurement_artists.extend(points)
+        self._pending_artists.extend(points)
         if len(self._measure_points) < 2:
             self.draw_idle()
             return
         (t1, s1), (t2, s2) = self._measure_points
         lines = self.axes.plot(
-            [t1, t2], [s1, s2], color=self.slope_color,
+            [t1, t2], [s1, s2], color=color,
             linewidth=self.slope_linewidth, linestyle=self.slope_linestyle,
         )
         for artist in lines:
             artist.set_gid("slope_measurement")
         self._measurement_artists.extend(lines)
-        delta_t = abs((t2 - t1) * 86400.0) if self.result.times is not None else abs(t2 - t1)
+        delta_t = abs((t2 - t1) * 86400.0) if self._true_time else abs(t2 - t1)
         delta_s = s2 - s1
-        velocity = self._velocity_text(delta_s, delta_t)
+        velocity = self._velocity_text(delta_s, delta_t, measurement_index)
+        text_color = color if self.slope_auto_colors else self.slope_text_color
+        transparent = self.slope_background_color.lower() == "transparent"
         label = self.axes.annotate(
             velocity,
             ((t1 + t2) / 2.0, (s1 + s2) / 2.0),
             xytext=(8, 8), textcoords="offset points",
-            color=self.slope_text_color, fontsize=self.slope_fontsize,
-            bbox={"facecolor": "black", "alpha": 0.55, "edgecolor": self.slope_color, "pad": 2},
+            color=text_color, fontsize=self.slope_fontsize,
+            bbox={
+                "facecolor": "none" if transparent else self.slope_background_color,
+                "alpha": 0.0 if transparent else 0.55,
+                "edgecolor": color, "pad": 2,
+            },
         )
         label.set_gid("slope_measurement")
         self._measurement_artists.append(label)
+        group = {
+            "index": measurement_index,
+            "delta_s": delta_s,
+            "delta_t": delta_t,
+            "artists": [*self._pending_artists, *lines, label],
+        }
+        self._measurement_groups.append(group)
+        plain_velocity = velocity.replace("$", "").replace("{", "").replace("}", "")
+        time_unit = "s" if self._true_time else "frame"
         self.slope_measured.emit(
-            f"Δt = {delta_t:.3g} s; Δs = {delta_s:.4g} {self.result.distance_unit}; {velocity}"
+            f"Δt = {delta_t:.3g} {time_unit}; Δs = {delta_s:.4g} "
+            f"{self.result.distance_unit}; {plain_velocity}"
         )
         self._measure_mode = False
         self._measure_points.clear()
+        self._pending_artists = []
+        self._pending_color = None
         self.draw_idle()
 
-    def _velocity_text(self, delta_s: float, delta_t: float) -> str:
+    def _velocity_text(self, delta_s: float, delta_t: float, index: int = 1) -> str:
         if delta_t == 0:
-            return "v = undefined (Δt = 0)"
+            return rf"$v_{{{index}}}$ = undefined"
         assert self.result is not None
-        unit = self.result.distance_unit
+        source_unit = self.result.distance_unit
+        unit = source_unit if self.slope_velocity_unit == "auto" else self.slope_velocity_unit
         precision = self.slope_precision
-        if unit == "Mm":
-            return f"v = {delta_s * 1000.0 / delta_t:.{precision}f} km/s"
-        if unit == "km":
-            return f"v = {delta_s / delta_t:.{precision}f} km/s"
-        if unit == "arcsec":
-            return f"v = {delta_s / delta_t:.{precision}f} arcsec/s"
-        return f"v = {delta_s / delta_t:.{precision}f} pixel/s"
+        try:
+            converted = convert_distance_value(
+                delta_s,
+                source_unit,
+                unit,
+                pixel_scale_arcsec_value=self.result.metadata.get("reference_pixel_scale_arcsec"),
+            )
+        except ValueError:
+            return rf"$v_{{{index}}}$ = unavailable"
+        denominator = "s" if self._true_time else "frame"
+        return rf"$v_{{{index}}}$ = {converted / delta_t:.{precision}f} {unit}/{denominator}"

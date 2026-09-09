@@ -21,6 +21,23 @@ def test_folder_sorts_by_observation_time_and_detects_irregularity(tmp_path: Pat
     assert dataset.summary().cadence_type == "irregular"
 
 
+def test_folder_reports_scan_progress_and_can_clear_frame_cache(tmp_path: Path) -> None:
+    generated = generate(tmp_path, n_frames=5)
+    updates: list[tuple[int, int, str]] = []
+    dataset = FitsFolderDataset(
+        generated["folder"], prepare_aia=False,
+        progress=lambda current, total, name: updates.append((current, total, name)),
+    )
+    assert len(updates) == 5
+    assert updates[-1][:2] == (5, 5)
+    dataset.get_frame(0)
+    assert len(dataset._cache) == 1
+    dataset.clear_cache(include_disk=True)
+    assert len(dataset._cache) == 0
+    assert len(dataset._map_cache) == 0
+    dataset.close()
+
+
 def test_folder_reads_irregular_times_from_primary_headers_and_extension_wcs(tmp_path: Path) -> None:
     """Primary timing plus image-extension WCS is common in solar FITS archives."""
     start = Time("2026-05-10T04:23:12.350", scale="utc")

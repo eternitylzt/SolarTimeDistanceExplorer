@@ -13,12 +13,51 @@ from app.processing.td_generator import TDResult
 from app.utils.exceptions import ExportError
 
 
-def export_figure(figure: Any, path: str | Path, dpi: int = 300, transparent: bool = False) -> None:
-    """Write a Matplotlib figure, never a lossy Qt screenshot."""
+def export_figure(
+    figure: Any,
+    path: str | Path,
+    dpi: int = 300,
+    transparent: bool = False,
+    *,
+    main_axes: Any | None = None,
+    include_axes: bool = True,
+    include_title: bool = True,
+    include_colorbar: bool = True,
+) -> None:
+    """Write a Matplotlib figure with reversible publication-view filtering.
+
+    Axes, title, and colorbar visibility are changed only while ``savefig`` is
+    running and are restored even if a backend fails.  The live GUI therefore
+    remains unchanged after exporting a stripped-down publication panel.
+    """
+    axes = main_axes or (figure.axes[0] if figure.axes else None)
+    axis_was_on = bool(getattr(axes, "axison", True)) if axes is not None else True
+    title_visible = axes.title.get_visible() if axes is not None else True
+    auxiliary = [item for item in figure.axes if item is not axes]
+    auxiliary_state = [
+        (item, item.get_visible(), item.get_in_layout()) for item in auxiliary
+    ]
     try:
+        if axes is not None:
+            if not include_axes:
+                axes.set_axis_off()
+            axes.title.set_visible(include_title and title_visible)
+        if not include_colorbar:
+            for item, _visible, _in_layout in auxiliary_state:
+                item.set_visible(False)
+                item.set_in_layout(False)
         figure.savefig(path, dpi=dpi, bbox_inches="tight", transparent=transparent)
     except Exception as exc:
         raise ExportError(f"无法将图像写入 {path}：{exc}") from exc
+    finally:
+        if axes is not None:
+            axes.set_axis_on() if axis_was_on else axes.set_axis_off()
+            axes.title.set_visible(title_visible)
+        for item, visible, in_layout in auxiliary_state:
+            item.set_visible(visible)
+            item.set_in_layout(in_layout)
+        if getattr(figure, "canvas", None) is not None:
+            figure.canvas.draw_idle()
 
 
 def export_td_npz(result: TDResult, path: str | Path) -> None:

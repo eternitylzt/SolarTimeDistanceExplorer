@@ -6,6 +6,8 @@
 2. Choose File → Open FITS Folder and choose the folder containing AIA FITS.
    Full-disk AIA Level-1 images are registered to Level-1.5 geometry with
    aiapy. AIA cutouts remain readable but are not falsely treated as full-disk.
+   The bottom status bar shows the current FITS name and scan progress. Opening
+   another source automatically releases the preceding dataset caches.
 3. Inspect Dataset: number of frames, start/end, cadence range and whether it is
    nearly uniform or irregular. If a real observation time is absent, choose
    Frame index deliberately, or enter ISO start time and cadence.
@@ -15,6 +17,8 @@
    percentages; Manual exposes vmin/vmax. A changed mode or value redraws at once
    without rereading the FITS frame. Leave Fixed normalization selected for an
    intensity-consistent animation.
+   The Animation FPS setting is also the live preview rate and takes effect
+   immediately while the preview is playing.
 5. If needed, click the image-toolbar Zoom button and drag around the subfield;
    click Zoom again before drawing (New Slit also deactivates it automatically).
    Set Reference frame. Open the New Slit drop-down and select the type for this
@@ -27,8 +31,8 @@
    image space to deselect all handles while keeping checked overlays visible for export.
    Use Help → Slit / Region Drawing Help for the same instructions without permanently
    occupying the control panel.
-6. In Scientific slit set Width = 5, Width unit = pixel, Integration = mean,
-   Interpolation = linear. Enable Show scientific width shadow to preview the
+6. In Slit Parameters set Slit width = 5, Unit = pixel, Integration = Mean,
+   Interpolation = Linear. Enable Show slit width to preview the
    actual numerical strip as a live semi-transparent band; the solid centreline
    thickness is only a display style.
 7. With reliable image WCS, select Coordinates = world and Tracking =
@@ -43,7 +47,11 @@
     The TD controls also set axis-title/tick font size and whether the x-axis
     title includes the first UTC timestamp. Slope colour, width and annotation
     size, annotation text colour and velocity decimal precision apply both to new
-    measurements and existing visible markers.
+    measurements and existing visible markers. Auto colors labels successive
+    measurements v₁, v₂, … with matching line/text colours. Velocity unit can
+    be changed independently of the plotted distance axis, and the annotation
+    background may be transparent. If the x-axis title includes Start time,
+    zooming or panning updates it to the visible interval's left edge.
 10. Edit the English plot title/axis labels, colormap/stretch/range, grid,
     colorbar, aspect, line style and font sizes as needed. Export the panel using
     Export TD figure (PDF/EPS/SVG preserve vector axes) and
@@ -123,6 +131,9 @@ The top toolbar's Save Current View button saves the plot visible on the right.
 Use its arrow to choose Map, Time–Distance, or Region Analysis explicitly. These
 exports call Matplotlib directly and are not screenshots. Figure labels and
 default titles are English even though workflow help remains Chinese.
+The export options can independently omit the colorbar, axes, or title and can
+use a transparent figure background; the visible interactive canvas is not
+modified by the export.
 The Layout button on every plot toolbar controls and remembers figure margins
 (Left/Right/Top/Bottom) and subplot spacing (WSpace/HSpace) for that page.
 
@@ -135,6 +146,10 @@ File → Save Project stores source locations, explicitly configured times,
 reference frame, paths, world samples, widths, integration/interpolation and
 display choices in .stdproj; image data are not duplicated. Opening it reloads
 the source. If a source moved, point the dialog at its new location.
+
+Settings → Clear Current Data Cache releases decoded frames and temporary
+AIA-prepared FITS files while retaining the open dataset and currently displayed
+frame. Subsequent frame access is intentionally read/prepared again.
 
 ## Troubleshooting
 
