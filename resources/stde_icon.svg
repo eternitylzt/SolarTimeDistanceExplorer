@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Solar Time–Distance Explorer</title>
+  <desc id="desc">A Sun emitting three outward-propagating wave fronts.</desc>
+  <circle cx="512" cy="512" r="408" fill="#102A43"/>
+  <circle cx="350" cy="512" r="150" fill="#F4A622"/>
+  <g fill="none" stroke="#F6F8FA" stroke-width="46" stroke-linecap="round">
+    <path d="M548 402 C650 446 650 578 548 622"/>
+    <path d="M625 326 C790 410 790 614 625 698"/>
+    <path d="M704 252 C932 380 932 644 704 772"/>
+  </g>
+</svg>

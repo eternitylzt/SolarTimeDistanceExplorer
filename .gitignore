@@ -1,0 +1,11 @@
+.venv/
+build/
+dist/
+__pycache__/
+.pytest_cache/
+tests/generated/
+*.py[cod]
+logs/
+*.log
+*-smoke.mp4
+*-smoke-frame.png
