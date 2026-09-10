@@ -1,13 +1,17 @@
-"""Main Windows desktop application for Solar Time–Distance Explorer."""
+"""Main desktop application for Solar Time–Distance Explorer."""
 
 from __future__ import annotations
 
 import logging
 import re
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+
+import matplotlib.dates as mdates
+import numpy as np
 
 from PySide6.QtCore import QEventLoop, QSettings, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
@@ -39,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.animation.exporter import export_animation
+from app.animation.exporter import export_animation, export_region_histogram_animation
 from app.version import __version__
 from app.data.base import TimeSeriesDataset
 from app.data.factory import open_from_descriptor
@@ -58,11 +62,17 @@ from app.paths.base import PathGeometry
 from app.paths.geometry import sample_path_geometry
 from app.plotting.export import export_figure, export_td_csv, export_td_fits, export_td_npz, export_td_txt
 from app.plotting.region_export import export_region_result
-from app.processing.region_analysis import RegionHistogramResult, RegionTrendResult, region_histograms
+from app.processing.region_analysis import (
+    RegionHistogramResult,
+    RegionHistogramSequence,
+    RegionTrendResult,
+    region_histograms,
+)
 from app.project.serializer import load_project, restore_times, save_project
 from app.processing.td_generator import TDConfig, TDResult
 from app.ui.dialogs import (
     AnimationExportDialog,
+    HistogramAnimationExportDialog,
     ManualTimeDialog,
     PlotLayoutDialog,
     TimeAxisDialog,
@@ -78,7 +88,7 @@ from app.ui.region_plot import RegionAnalysisCanvas
 from app.ui.td_plot import TimeDistanceCanvas
 from app.utils.logging import log_directory
 from app.workers.td_worker import TDWorker
-from app.workers.region_worker import RegionTrendWorker
+from app.workers.region_worker import RegionHistogramSequenceWorker, RegionTrendWorker
 from app.regions.base import RegionGeometry
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 
@@ -106,8 +116,13 @@ class MainWindow(QMainWindow):
         self._next_region_number = 1
         self.region_result: RegionTrendResult | RegionHistogramResult | None = None
         self._full_region_result: RegionTrendResult | RegionHistogramResult | None = None
-        self._region_worker: RegionTrendWorker | None = None
+        self._region_worker: RegionTrendWorker | RegionHistogramSequenceWorker | None = None
         self._region_progress: QProgressDialog | None = None
+        self._region_hist_sequence: RegionHistogramSequence | None = None
+        self._region_hist_position = 0
+        self._region_hist_timer = QTimer(self)
+        self._region_hist_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._region_hist_timer.timeout.connect(self._advance_region_histogram)
         self._fixed_norm: Any | None = None
         self._td_worker: TDWorker | None = None
         self._td_progress: QProgressDialog | None = None
@@ -150,6 +165,8 @@ class MainWindow(QMainWindow):
         self.region_panel.active_changed.connect(self._active_region_changed)
         self.region_panel.calculate_trend.connect(self.calculate_region_trends)
         self.region_panel.calculate_histogram.connect(self.calculate_region_histograms)
+        self.region_panel.calculate_histogram_range.connect(self.calculate_region_histogram_sequence)
+        self.region_panel.use_td_time_range.connect(self.use_td_visible_time_range)
         self.region_panel.export_data.connect(self.export_region_data)
         self.region_panel.changed.connect(self._region_settings_changed)
         self.region_panel.help_clicked.connect(self.show_drawing_help)
@@ -305,7 +322,7 @@ class MainWindow(QMainWindow):
         self.td_aspect.currentIndexChanged.connect(self._redraw_td)
         self.slope_width.valueChanged.connect(self._apply_slope_style)
         self.slope_linestyle.currentIndexChanged.connect(self._apply_slope_style)
-        self.slope_fontsize.valueChanged.connect(self._apply_slope_style)
+        self.slope_fontsize.valueChanged.connect(self._slope_fontsize_changed)
         self.slope_precision.valueChanged.connect(self._apply_slope_style)
         self.slope_velocity_unit.currentIndexChanged.connect(self._apply_slope_style)
         self.slope_background_transparent.toggled.connect(self._slope_background_transparency_changed)
@@ -428,6 +445,28 @@ class MainWindow(QMainWindow):
         region_legend_style.addWidget(self.region_sync_legend)
         region_legend_style.addWidget(region_save); region_legend_style.addStretch(1)
         region_layout.addLayout(region_legend_style)
+        self.region_histogram_player = QWidget()
+        histogram_player_layout = QHBoxLayout(self.region_histogram_player)
+        histogram_player_layout.setContentsMargins(0, 0, 0, 0)
+        self.region_hist_previous = QPushButton("◀")
+        self.region_hist_play = QPushButton("▶ 播放")
+        self.region_hist_next = QPushButton("▶")
+        self.region_hist_slider = QSlider(Qt.Orientation.Horizontal)
+        self.region_hist_frame_label = QLabel("Histogram sequence: —")
+        self.region_hist_export = QPushButton("导出直方图动画…")
+        self.region_hist_previous.clicked.connect(lambda: self._move_region_histogram(-1))
+        self.region_hist_play.clicked.connect(self.toggle_region_histogram_animation)
+        self.region_hist_next.clicked.connect(lambda: self._move_region_histogram(1))
+        self.region_hist_slider.valueChanged.connect(self.show_region_histogram_frame)
+        self.region_hist_export.clicked.connect(self.export_region_histogram_movie)
+        histogram_player_layout.addWidget(self.region_hist_previous)
+        histogram_player_layout.addWidget(self.region_hist_play)
+        histogram_player_layout.addWidget(self.region_hist_next)
+        histogram_player_layout.addWidget(self.region_hist_slider, 1)
+        histogram_player_layout.addWidget(self.region_hist_frame_label)
+        histogram_player_layout.addWidget(self.region_hist_export)
+        self.region_histogram_player.setVisible(False)
+        region_layout.addWidget(self.region_histogram_player)
         for control in (self.region_plot_title, self.region_x_label, self.region_y_label):
             control.editingFinished.connect(self._redraw_region)
         for control in (self.region_time_format, self.region_line_style, self.region_marker, self.region_x_scale, self.region_y_scale):
@@ -443,6 +482,7 @@ class MainWindow(QMainWindow):
         self.region_panel.histogram_plot_type.currentIndexChanged.connect(self._redraw_region)
         self.region_panel.histogram_y_unit.currentIndexChanged.connect(self._redraw_region)
         self.region_panel.trend_plot_type.currentIndexChanged.connect(self._redraw_region)
+        self.region_panel.histogram_fps.valueChanged.connect(self._region_histogram_fps_changed)
         self.region_navigation = NavigationToolbar2QT(self.region_canvas, region_tab, coordinates=True)
         self._install_layout_action(self.region_navigation, self.region_canvas, "region")
         region_layout.addWidget(self.region_navigation)
@@ -872,6 +912,15 @@ class MainWindow(QMainWindow):
         self._apply_slope_style()
         self._sync_selected_slope_controls()
 
+    def _slope_fontsize_changed(self, value: float) -> None:
+        """Apply annotation size to Next, All, or the selected velocity marker."""
+        target = int(self.slope_selection.currentData() or 0)
+        if self.slope_auto_colors.isChecked():
+            self.td_canvas.set_measurement_style(-1, font_size=value)
+        elif target != 0:
+            self.td_canvas.set_measurement_style(target, font_size=value)
+        self._apply_slope_style()
+
     def _slope_auto_colors_changed(self, checked: bool) -> None:
         self._apply_slope_style()
         self._sync_selected_slope_controls()
@@ -916,17 +965,23 @@ class MainWindow(QMainWindow):
             self.slope_background_transparent.blockSignals(True)
             self.slope_background_transparent.setChecked(style[2].lower() == "transparent")
             self.slope_background_transparent.blockSignals(False)
+            self.slope_fontsize.blockSignals(True)
+            self.slope_fontsize.setValue(style[3])
+            self.slope_fontsize.blockSignals(False)
         editable = not self.slope_auto_colors.isChecked() and style is not None
         self.slope_selection.setEnabled(not self.slope_auto_colors.isChecked())
         self.slope_color.setEnabled(editable)
         self.slope_text_color.setEnabled(editable)
         self.slope_background_transparent.setEnabled(editable)
+        self.slope_fontsize.setEnabled(self.slope_auto_colors.isChecked() or editable)
         self.slope_background.setEnabled(
             editable and not self.slope_background_transparent.isChecked()
         )
 
     def _apply_slope_style(self) -> None:
         target = int(self.slope_selection.currentData() or 0)
+        if self.slope_auto_colors.isChecked():
+            target = 0
         defaults = self.td_canvas.measurement_style(0)
         assert defaults is not None
         if target == 0:
@@ -938,9 +993,10 @@ class MainWindow(QMainWindow):
                 else self.slope_background.text()
             )
         else:
-            line_color, text_color, background = defaults
+            line_color, text_color, background = defaults[:3]
         self.td_canvas.set_slope_style(
-            line_color, self.slope_width.value(), self.slope_fontsize.value(),
+            line_color, self.slope_width.value(),
+            self.slope_fontsize.value() if target == 0 else defaults[3],
             self._combo_value(self.slope_linestyle),
             text_color, self.slope_precision.value(), background,
             self._combo_value(self.slope_velocity_unit), self.slope_auto_colors.isChecked(),
@@ -968,7 +1024,7 @@ class MainWindow(QMainWindow):
             "切片/区域绘制与科学参数说明",
             "【缩放与绘制】先用图像上方放大镜拖框放大；再关闭放大镜，或直接点击“新建切片/绘制新区域”（程序会自动退出缩放模式）。\n\n"
             "【Slit】在 Slit Manager 最左侧点击“New Slit”并从下拉菜单直接选择 Line、Polyline 或 Smooth Curve。程序会切回图像页并独占 Slit 鼠标事件。直线依次单击起点和终点后自动完成；折线/平滑曲线逐点单击，在原地双击或单击右键完成。中间的 Delete Selected 只删除列表当前选中的 Slit，右侧 Help 打开本说明。完成后可拖动控制点和标签；在空白处左击可取消选择并隐藏控制点。标签背景可勾选 Transparent。\n\n"
-            "【Region】在 Region Manager 点击“New Region”并直接选择形状。圆形：单击圆心，移动鼠标预览，再单击确定半径。长方形：先单击一条边的两个端点，再移动并单击确定高度。多边形：逐点单击，在原地双击或单击右键闭合。区域标签背景同样可设为 Transparent。区域列表的勾选状态同时控制 Map、时间变化和当前帧直方图；未勾选区域不参与新计算。\n\n"
+            "【Region】在 Region Manager 点击“New Region”并直接选择形状。圆形：单击圆心，移动鼠标预览，再单击确定半径。长方形：先单击一条边的两个端点，再移动并单击确定高度。多边形：逐点单击，在原地双击或单击右键闭合。区域标签背景同样可设为 Transparent。区域列表的勾选状态同时控制 Map、时间变化和直方图；未勾选区域不参与新计算。范围直方图使用一基 Start/End 和 Step；也可先缩放 TD，再点击“使用 TD 当前时间范围”。完成后可用滑块、播放按钮逐帧检查，并导出 MP4/GIF。\n\n"
             "【切片坐标保存方式】“像素坐标”保存参考帧中的 x/y；“世界坐标/WCS”把切片保存为太阳物理坐标。它决定切片本身如何被记录。\n\n"
             "【逐帧跟踪方式】“固定像素位置”在每帧使用相同 x/y；“固定世界坐标”利用每帧 WCS 把同一太阳位置重新投影到像素，可适应 CRPIX/指向变化；“太阳自转跟踪”目前仍为实验功能。世界坐标保存通常应配合固定世界坐标跟踪。\n\n"
             "【时距图距离单位】只决定生成结果纵轴的累计弧长单位，可选 pixel、arcsec、km、Mm；不会改变切片保存或跟踪方式。km/Mm 仅在 WCS 与太阳距离足以可靠换算时可用。\n\n"
@@ -977,7 +1033,7 @@ class MainWindow(QMainWindow):
             "【Normalization】Percentile 按可设置的 Lower/Upper percentile 确定显示上下限（默认 1%/99%）；Manual 使用 vmin/vmax；Min–Max 使用当前数据极值；ZScale 使用天文图像常用的鲁棒线性范围。切换或修改参数会立即重绘，但不修改原数据。\n\n"
             "【动画导出】默认导出图像窗口当前显示的坐标范围；也可以改为完整图像。坐标轴、实际观测时间、标题、Colorbar、Slit 和 Region 均可分别选择是否写入每一帧。\n\n"
             "【缓存与保存视图】打开新的数据源时会自动释放上一个数据集的内存与 AIA 临时缓存；也可用“设置 → 清除当前数据缓存”手动释放。保存当前视图时可独立选择是否包含坐标轴、标题和 Colorbar。\n\n"
-            "【绘图历史】“查看 → 绘图历史”按时间记录 Map 数据载入、已完成的 Slit/Region、TD、区域趋势和直方图；点击可回到对应页面，同一数据源仍打开时还会重新选中标记。默认最多 20 条，可在历史菜单底部调整。\n\n"
+            "【绘图历史】“查看 → 绘图历史”按时间记录 Map 数据载入、已完成的 Slit/Region、TD、区域趋势、直方图和直方图序列；Region 结果保存轻量快照，因此共享画布被后续绘图覆盖后仍可恢复。点击可回到对应页面，同一数据源仍打开时还会重新选中标记。默认最多 20 条，可在历史菜单底部调整。\n\n"
             "【科学宽度阴影】勾选后，Map 上的半透明色带显示实际 Slit 宽度，并随数值/单位实时更新；它对应法向取样范围。显示线宽只改变中心线的屏幕粗细，两者完全独立。\n\n"
             "【绘图页布局】Image、Time–Distance 和 Region 工具栏中的“布局”用于设置 Left/Right/Top/Bottom/WSpace/HSpace。设置会立即应用并按页面保存；这些参数是画布边距/子图间距，不是数据网格刻度间隔。",
         )
@@ -1079,8 +1135,16 @@ class MainWindow(QMainWindow):
         marker_kind: str | None = None,
         marker_id: str | None = None,
         frame: int | None = None,
+        region_result: RegionTrendResult | RegionHistogramResult | None = None,
+        histogram_sequence: RegionHistogramSequence | None = None,
+        histogram_position: int = 0,
     ) -> None:
-        """Record a bounded, navigation-only history without retaining image arrays."""
+        """Record navigation plus lightweight Region result snapshots.
+
+        Dataset frames are never copied. Region curves and histogram bins are
+        retained so two results rendered in the shared canvas remain independently
+        recoverable from the bounded history menu.
+        """
         self._history_entries.insert(
             0,
             {
@@ -1093,6 +1157,9 @@ class MainWindow(QMainWindow):
                 "marker_id": marker_id,
                 "frame": self.current_frame if frame is None else frame,
                 "source": str(self.dataset.source) if self.dataset is not None else None,
+                "region_result": deepcopy(region_result),
+                "histogram_sequence": deepcopy(histogram_sequence),
+                "histogram_position": int(histogram_position),
             },
         )
         del self._history_entries[max(1, self.history_limit):]
@@ -1148,6 +1215,19 @@ class MainWindow(QMainWindow):
         if isinstance(left_tab, int):
             self.left_tabs.setCurrentIndex(left_tab)
         self.main_tabs.setCurrentIndex(int(entry["main_tab"]))
+        sequence = entry.get("histogram_sequence")
+        snapshot = entry.get("region_result")
+        if isinstance(sequence, RegionHistogramSequence):
+            self._install_region_histogram_sequence(
+                deepcopy(sequence), int(entry.get("histogram_position", 0)), record=False
+            )
+        elif isinstance(snapshot, (RegionTrendResult, RegionHistogramResult)):
+            self._region_hist_timer.stop()
+            self.region_hist_play.setText("▶ 播放")
+            self.region_histogram_player.setVisible(False)
+            self._region_hist_sequence = None
+            self._full_region_result = deepcopy(snapshot)
+            self._apply_region_result_visibility()
         marker_id = entry.get("marker_id")
         if entry.get("marker_kind") == "slit" and marker_id:
             row = next((i for i, item in enumerate(self.paths) if item.id == marker_id), -1)
@@ -1397,9 +1477,15 @@ class MainWindow(QMainWindow):
         self._next_region_number = 1
         self.region_result = None
         self._full_region_result = None
+        self._region_hist_timer.stop()
+        self._region_hist_sequence = None
+        self._region_hist_position = 0
+        self.region_histogram_player.setVisible(False)
+        self.region_hist_play.setText("▶ 播放")
         self._fixed_norm = None
         self.path_panel.paths.clear()
         self.region_panel.regions.clear()
+        self.region_panel.set_frame_range(dataset.n_frames)
         self.image_canvas.set_paths([])
         self.image_canvas.set_regions([])
         self.frame_slider.blockSignals(True)
@@ -1821,6 +1907,9 @@ class MainWindow(QMainWindow):
         self._region_worker.start(); self._region_progress.show()
 
     def _region_trends_finished(self, result: RegionTrendResult) -> None:
+        self._region_hist_timer.stop()
+        self._region_hist_sequence = None
+        self.region_histogram_player.setVisible(False)
         self._full_region_result = result
         self._apply_region_result_visibility()
         self.main_tabs.setCurrentIndex(2)
@@ -1828,7 +1917,8 @@ class MainWindow(QMainWindow):
             f"已计算 {len(result.region_names)} 个区域的{result.statistic}时间变化。"
         )
         self._record_history(
-            f"Region trend: {', '.join(result.region_names)}", main_tab=2, left_tab=3
+            f"Region trend: {', '.join(result.region_names)}", main_tab=2, left_tab=3,
+            region_result=result,
         )
 
     def calculate_region_histograms(self) -> None:
@@ -1843,6 +1933,9 @@ class MainWindow(QMainWindow):
             )
             if not result.region_names:
                 raise ValueError("请至少勾选一个已完成的闭合区域。")
+            self._region_hist_timer.stop()
+            self._region_hist_sequence = None
+            self.region_histogram_player.setVisible(False)
             self._full_region_result = result
             self._apply_region_result_visibility()
             self.main_tabs.setCurrentIndex(2)
@@ -1850,9 +1943,169 @@ class MainWindow(QMainWindow):
                 f"Region histogram: {', '.join(result.region_names)}",
                 main_tab=2,
                 left_tab=3,
+                region_result=result,
             )
         except Exception as exc:
             show_error(self, "无法计算区域直方图", str(exc))
+
+    def use_td_visible_time_range(self) -> None:
+        """Copy the currently zoomed TD x-range into Region frame controls."""
+        if self.dataset is None or self.td_result is None:
+            self.statusBar().showMessage("请先生成时距图，再缩放到所需时间范围。", 7000)
+            return
+        left, right = sorted(self.td_canvas.axes.get_xlim())
+        if self.td_canvas._true_time and self.dataset.times is not None:
+            centers = np.asarray(mdates.date2num(self.dataset.times.utc.to_datetime()), dtype=float)
+        else:
+            centers = np.arange(self.dataset.n_frames, dtype=float)
+        inside = np.flatnonzero((centers >= left) & (centers <= right))
+        if inside.size:
+            start, end = int(inside[0]), int(inside[-1])
+        else:
+            start = int(np.argmin(np.abs(centers - left)))
+            end = int(np.argmin(np.abs(centers - right)))
+            start, end = sorted((start, end))
+        self.region_panel.histogram_start.setValue(start + 1)
+        self.region_panel.histogram_end.setValue(end + 1)
+        self.statusBar().showMessage(
+            f"已采用 TD 当前可见范围：Frame {start + 1}–{end + 1}。", 7000
+        )
+
+    def calculate_region_histogram_sequence(self) -> None:
+        """Calculate an inclusive histogram frame range without blocking the GUI."""
+        if self.dataset is None:
+            return
+        completed = [item for item in self.regions if item.complete and item.visible]
+        if not completed:
+            self.statusBar().showMessage("请至少勾选一个已完成的闭合区域。")
+            return
+        start = self.region_panel.histogram_start.value() - 1
+        end = self.region_panel.histogram_end.value() - 1
+        step = self.region_panel.histogram_step.value()
+        total = len(range(min(start, end), max(start, end) + 1, max(1, step)))
+        self._region_worker = RegionHistogramSequenceWorker(
+            self.dataset, completed, start, end, step, self.region_panel.bin_width.value()
+        )
+        self._region_progress = QProgressDialog(
+            "正在计算区域直方图序列…", "取消", 0, max(1, total), self
+        )
+        self._region_progress.setWindowModality(Qt.WindowModal)
+        self._region_progress.canceled.connect(self._region_worker.request_cancel)
+        self._region_worker.progress.connect(self._region_progress.setValue)
+        self._region_worker.completed.connect(self._region_histogram_sequence_finished)
+        self._region_worker.failed.connect(self._region_failed)
+        self._region_worker.cancelled.connect(
+            lambda: self.statusBar().showMessage("区域直方图序列计算已取消。")
+        )
+        self._region_worker.finished.connect(self._cleanup_region_worker)
+        self._region_worker.start(); self._region_progress.show()
+
+    def _region_histogram_sequence_finished(self, result: RegionHistogramSequence) -> None:
+        self._install_region_histogram_sequence(result, 0, record=True)
+
+    def _install_region_histogram_sequence(
+        self, result: RegionHistogramSequence, position: int = 0, *, record: bool
+    ) -> None:
+        """Install a sequence into the shared Region canvas and playback strip."""
+        self._region_hist_timer.stop()
+        self.region_hist_play.setText("▶ 播放")
+        self._region_hist_sequence = result
+        self.region_hist_slider.blockSignals(True)
+        self.region_hist_slider.setRange(0, max(0, result.n_frames - 1))
+        self.region_hist_slider.setValue(max(0, min(position, result.n_frames - 1)))
+        self.region_hist_slider.blockSignals(False)
+        self.region_histogram_player.setVisible(True)
+        self.show_region_histogram_frame(self.region_hist_slider.value())
+        self.main_tabs.setCurrentIndex(2)
+        if record:
+            names = ", ".join(result.results[0].region_names) if result.results else ""
+            self._record_history(
+                f"Region histogram sequence: {names} (Frames {result.start_frame + 1}–{result.end_frame + 1})",
+                main_tab=2, left_tab=3, histogram_sequence=result, histogram_position=0,
+            )
+        self.statusBar().showMessage(
+            f"已生成 {result.n_frames} 帧区域直方图序列。", 7000
+        )
+
+    def show_region_histogram_frame(self, position: int) -> None:
+        sequence = self._region_hist_sequence
+        if sequence is None or not sequence.results:
+            return
+        position = max(0, min(int(position), sequence.n_frames - 1))
+        self._region_hist_position = position
+        self.region_hist_slider.blockSignals(True)
+        self.region_hist_slider.setValue(position)
+        self.region_hist_slider.blockSignals(False)
+        result = sequence.results[position]
+        self._full_region_result = result
+        self._apply_region_result_visibility()
+        observation = result.time.utc.isot if result.time is not None else "no time metadata"
+        self.region_hist_frame_label.setText(
+            f"Frame {result.frame_index + 1} / {self.dataset.n_frames if self.dataset else '?'} · {observation}"
+        )
+
+    def _move_region_histogram(self, offset: int) -> None:
+        sequence = self._region_hist_sequence
+        if sequence is None or not sequence.results:
+            return
+        self.show_region_histogram_frame((self._region_hist_position + offset) % sequence.n_frames)
+
+    def toggle_region_histogram_animation(self) -> None:
+        if self._region_hist_sequence is None:
+            return
+        if self._region_hist_timer.isActive():
+            self._region_hist_timer.stop(); self.region_hist_play.setText("▶ 播放")
+        else:
+            self._region_histogram_fps_changed()
+            self._region_hist_timer.start(); self.region_hist_play.setText("⏸ 暂停")
+
+    def _region_histogram_fps_changed(self, *_args: object) -> None:
+        interval = max(1, round(1000.0 / self.region_panel.histogram_fps.value()))
+        self._region_hist_timer.setInterval(interval)
+
+    def _advance_region_histogram(self) -> None:
+        self._move_region_histogram(1)
+
+    def export_region_histogram_movie(self) -> None:
+        sequence = self._region_hist_sequence
+        if sequence is None:
+            self.statusBar().showMessage("请先生成帧范围直方图序列。")
+            return
+        dialog = HistogramAnimationExportDialog(self.region_panel.histogram_fps.value(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出区域直方图动画", "region_histograms.mp4", "MP4 (*.mp4);;GIF (*.gif)"
+        )
+        if not path:
+            return
+        settings = dialog.settings()
+        progress = QProgressDialog(
+            "正在渲染区域直方图动画…", "", 0, sequence.n_frames + 1, self
+        )
+        progress.setCancelButton(None); progress.setWindowModality(Qt.WindowModal); progress.show()
+        try:
+            export_region_histogram_animation(
+                sequence, path, float(settings["fps"]), settings["size"],
+                plot_type=self._combo_value(self.region_panel.histogram_plot_type),
+                y_unit=self._combo_value(self.region_panel.histogram_y_unit),
+                line_width=self.region_line_width.value(),
+                line_style=self._combo_value(self.region_line_style),
+                title_size=self.region_title_size.value(),
+                axis_label_size=self.region_axis_label_size.value(),
+                tick_label_size=self.region_tick_size.value(),
+                legend_fontsize=self.region_legend_size.value(),
+                grid=self.region_grid.isChecked(),
+                progress=lambda current, total: (
+                    progress.setMaximum(total), progress.setValue(current), QApplication.processEvents()
+                ),
+            )
+            self.statusBar().showMessage(f"区域直方图动画已保存：{path}", 9000)
+        except Exception as exc:
+            LOG.exception("Region histogram movie export failed")
+            show_error(self, "无法导出区域直方图动画", str(exc))
+        finally:
+            progress.close()
 
     def _region_failed(self, message: str, trace: str) -> None:
         LOG.error("Region worker failed: %s\n%s", message, trace)
@@ -1895,11 +2148,37 @@ class MainWindow(QMainWindow):
                 **common,
             )
         else:
+            x_limits = None
+            y_limits = None
+            if self._region_hist_sequence is not None:
+                visible_ids = {item.id for item in self.regions if item.visible}
+                edges: list[np.ndarray] = []
+                maximum = 0.0
+                frequency = self._combo_value(self.region_panel.histogram_y_unit) == "frequency"
+                for frame_result in self._region_hist_sequence.results:
+                    for index, region_id in enumerate(frame_result.region_ids):
+                        if region_id not in visible_ids:
+                            continue
+                        edges.append(frame_result.edges[index])
+                        counts = np.asarray(frame_result.counts[index], dtype=float)
+                        if frequency and counts.sum() > 0:
+                            counts = counts / counts.sum()
+                        if counts.size:
+                            maximum = max(maximum, float(np.nanmax(counts)))
+                if edges:
+                    x_limits = (
+                        min(float(np.nanmin(item)) for item in edges),
+                        max(float(np.nanmax(item)) for item in edges),
+                    )
+                    if self._combo_value(self.region_y_scale) == "linear":
+                        y_limits = (0.0, maximum * 1.08 if maximum > 0 else 1.0)
             self.region_canvas.show_histograms(
                 self.region_result,
                 x_scale=self._combo_value(self.region_x_scale),
                 plot_type=self._combo_value(self.region_panel.histogram_plot_type),
                 y_unit=self._combo_value(self.region_panel.histogram_y_unit),
+                x_limits=x_limits,
+                y_limits=y_limits,
                 **common,
             )
 

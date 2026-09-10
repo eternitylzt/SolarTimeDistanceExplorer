@@ -221,7 +221,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         for artist in group["artists"]:
             if isinstance(artist, Text):
                 artist.set_color(text_color)
-                artist.set_fontsize(self.slope_fontsize)
+                artist.set_fontsize(float(group.get("font_size", self.slope_fontsize)))
                 artist.set_text(self._velocity_text(group["delta_s"], group["delta_t"], group["index"]))
                 patch = artist.get_bbox_patch()
                 if patch is not None:
@@ -238,10 +238,13 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
     def measurement_count(self) -> int:
         return len(self._measurement_groups)
 
-    def measurement_style(self, index: int) -> tuple[str, str, str] | None:
-        """Return line, text and background colours for one marker or defaults."""
+    def measurement_style(self, index: int) -> tuple[str, str, str, float] | None:
+        """Return line/text/background colours and text size for one marker."""
         if index == 0:
-            return self.slope_color, self.slope_text_color, self.slope_background_color
+            return (
+                self.slope_color, self.slope_text_color,
+                self.slope_background_color, self.slope_fontsize,
+            )
         if index == -1:
             group = self._measurement_groups[0] if self._measurement_groups else None
         else:
@@ -254,6 +257,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             str(group["line_color"]),
             str(group["text_color"]),
             str(group.get("background_color", self.slope_background_color)),
+            float(group.get("font_size", self.slope_fontsize)),
         )
 
     def measurement_colors(self, index: int) -> tuple[str, str] | None:
@@ -276,6 +280,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         line_color: str | None = None,
         text_color: str | None = None,
         background_color: str | None = None,
+        font_size: float | None = None,
     ) -> None:
         """Change one velocity marker, or all markers when ``index == -1``."""
         groups = (
@@ -292,6 +297,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
                 group["text_color"] = text_color
             if background_color is not None:
                 group["background_color"] = background_color
+            if font_size is not None:
+                group["font_size"] = float(font_size)
             self._style_measurement_group(group)
         self.draw_idle()
 
@@ -387,6 +394,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             "line_color": color,
             "text_color": text_color,
             "background_color": self.slope_background_color,
+            "font_size": self.slope_fontsize,
             "line": lines[0],
             "label": label,
             "artists": [*lines, label],

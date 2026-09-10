@@ -124,6 +124,8 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         title_size: float = 12.0,
         legend_fontsize: float = 12.0,
         y_unit: str = "count",
+        x_limits: tuple[float, float] | None = None,
+        y_limits: tuple[float, float] | None = None,
     ) -> None:
         self.figure.clear()
         self.axes = self.figure.add_subplot(111)
@@ -164,6 +166,10 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         )
         self.axes.set_xscale(x_scale)
         self.axes.set_yscale(y_scale)
+        if x_limits is not None:
+            self.axes.set_xlim(*x_limits)
+        if y_limits is not None:
+            self.axes.set_ylim(*y_limits)
         if grid:
             self.axes.grid(True, which="both", alpha=0.25)
         else:

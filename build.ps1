@@ -16,6 +16,10 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
         "C:\Program Files\Python311\python.exe"
     ) | Where-Object { Test-Path -LiteralPath $_ }
     if (-not $candidates) {
+        $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCommand) { $candidates = @($pythonCommand.Source) }
+    }
+    if (-not $candidates) {
         throw "Python 3.11 or 3.12 was not found. Install a 64-bit Python, then rerun."
     }
     & $candidates[0] -m venv .venv

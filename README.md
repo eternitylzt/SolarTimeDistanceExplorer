@@ -2,21 +2,21 @@
 
 [中文](#中文说明) · [English](#english)
 
-Windows desktop software for solar-image browsing, interactive Slit/Region
+Cross-platform desktop software for solar-image browsing, interactive Slit/Region
 analysis, true-time time–distance diagrams, animation, and publication-quality
 export.
 
 **Author:** Zhentong Li · eternitylzt@gmail.com ·
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Current version: **0.8.3** — functional research preview.
+> Current version: **0.9.0** — functional research preview.
 
 ## 中文说明
 
 ### 下载与运行
 
 在 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases)
-下载 `SolarTimeDistanceExplorer-0.8.3-Windows-x64.zip`。完整解压后运行
+Windows 用户下载 `SolarTimeDistanceExplorer-0.9.0-Windows-x64.zip`。完整解压后运行
 `SolarTimeDistanceExplorer.exe`，无需另装 Python。请保留 EXE 与 `_internal`
 目录的相对位置。
 
@@ -30,10 +30,10 @@ export.
 - 鼠标绘制、编辑和管理 Line、Polyline、Smooth Curve Slit。
 - 默认使用 World/WCS 坐标、world-fixed tracking、arcsec Slit width、arcsec TD 距离及曝光时间归一化（可关闭）。
 - 科学 Slit width 在路径法向参与 Mean/Median/Sum/Maximum/Minimum 统计；显示线宽仅影响外观。
-- 多个 Circle、Rotated Rectangle、Polygon Region 的时间趋势和当前帧直方图。
+- 多个 Circle、Rotated Rectangle、Polygon Region 的时间趋势、当前帧直方图和帧范围直方图动画。
 - 速度测量默认输出 km/s；支持 `v₁、v₂…`、All/逐项样式、可拖动文字及独立 Text Background。
 - GIF/MP4、PNG/PDF/EPS/SVG/TIFF、TD/Region FITS/NPZ/CSV/TXT 和 `.stdproj` 项目文件。
-- 绘图历史可回到当前数据集中的 Map、Slit、Region、TD、趋势或直方图。
+- 绘图历史保存轻量结果快照，可恢复被后续绘图覆盖的趋势、直方图或直方图序列。
 
 ### 快速使用
 
@@ -47,6 +47,8 @@ export.
 5. 在 TD 图上点击 **测量速度**，依次点击传播结构上的两点。关闭 Auto colors 后，
    Selected 可选 All 或单个 `v_n`；修改 Line 会先让文字同步同色，之后可单独修改 Text。
 6. 在 **区域** 页选择 Circle、Rectangle 或 Polygon，只分析列表中勾选的区域。
+   可设置 Start/End/Step，或缩放 TD 后点击 **使用 TD 当前时间范围**；生成的
+   直方图序列可逐帧播放并导出 MP4/GIF。
 7. 使用各图页保存按钮或顶部 **保存当前视图**；图像输出由 Matplotlib 生成，不是界面截图。
 
 完整操作见 [docs/UserGuide.md](docs/UserGuide.md)，算法见
@@ -68,6 +70,16 @@ export.
 ```
 
 输出位于 `dist/SolarTimeDistanceExplorer/` 和 `release/`。
+
+### 多平台基础
+
+- Windows x64：主要验证平台，Release 提供完整 onedir ZIP。
+- Linux x64：GitHub Actions 在 Ubuntu 原生构建 tar.gz。
+- macOS Apple Silicon / Intel：分别在对应 runner 原生构建 `.app` ZIP。
+
+Linux/macOS 包由 `.github/workflows/multiplatform-release.yml` 在对应系统构建，
+不是 Windows 交叉编译。当前 macOS 包未做 Apple 开发者签名/公证，首次运行可能需要
+在“隐私与安全性”中确认；它们属于研究预览版。Unix 开发者可运行 `bash build_unix.sh`。
 
 ### 快捷键
 
@@ -96,7 +108,7 @@ export.
 
 ### Download
 
-Download `SolarTimeDistanceExplorer-0.8.3-Windows-x64.zip` from
+Download `SolarTimeDistanceExplorer-0.9.0-Windows-x64.zip` from
 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases),
 extract the complete folder, and run `SolarTimeDistanceExplorer.exe`. Python is
 not required. Keep the EXE beside its `_internal` directory.
@@ -112,9 +124,9 @@ not required. Keep the EXE beside its `_internal` directory.
 - World-coordinate storage/tracking when WCS is valid. Defaults are arcsec Slit
   width, arcsec TD distance, and exposure normalization.
 - Real finite-width normal sampling with configurable statistic and interpolation.
-- Multi-Region trends and histograms for circles, rotated rectangles, and polygons.
+- Multi-Region trends, current-frame histograms, and playable frame-range histogram sequences.
 - Velocity measurements default to km/s. Markers `v₁, v₂…` support automatic
-  colours or All/per-marker line, text, and text-background styling.
+  colours or All/per-marker line, text, text size, and text-background styling.
 - Publication figures, GIF/MP4, numerical TD/Region exports, and JSON project files.
 
 ### Workflow
@@ -128,13 +140,14 @@ not required. Keep the EXE beside its `_internal` directory.
 5. Click **Measure Velocity** and choose two points. Disable Auto colors to edit
    All markers or one selected `v_n`. Changing Line colour initially matches its
    Text colour; Text and Text Background remain independently editable.
-6. Use Regions for time trends or current-frame distributions, then export data
-   and figures from the corresponding page.
+6. Use Regions for trends, current-frame distributions, or a Start/End/Step
+   histogram sequence. The visible TD range can fill this range; sequences have
+   slider/playback controls and MP4/GIF export.
 
 See [docs/UserGuide.md](docs/UserGuide.md) for detailed operation and
 [docs/Algorithm.md](docs/Algorithm.md) for the scientific definitions.
 
-### Source and Windows build
+### Source and native builds
 
 ```powershell
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt
@@ -144,6 +157,10 @@ See [docs/UserGuide.md](docs/UserGuide.md) for detailed operation and
 
 `build.ps1` runs the test suite and creates the complete onedir package, release
 ZIP, and SHA-256 checksum.
+
+On Linux or macOS, use `bash build_unix.sh`. Tagged releases are built natively
+on Windows x64, Linux x64, macOS Apple Silicon and macOS Intel by GitHub Actions.
+Windows remains the primary verified platform; unsigned Unix packages are research previews.
 
 ### Scientific notes
 

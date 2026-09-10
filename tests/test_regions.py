@@ -9,7 +9,12 @@ from matplotlib.backend_bases import MouseButton
 from PySide6.QtWidgets import QApplication
 
 from app.data.fits_folder import FitsFolderDataset
-from app.processing.region_analysis import analyze_region_trends, region_histograms
+from app.animation.exporter import export_region_histogram_animation
+from app.processing.region_analysis import (
+    analyze_region_trends,
+    region_histogram_sequence,
+    region_histograms,
+)
 from app.regions.base import RegionGeometry
 from app.plotting.region_export import export_region_result
 from app.ui.main_window import MainWindow
@@ -76,3 +81,46 @@ def test_interactive_circle_uses_two_clicks(tmp_path) -> None:
     assert not window.region_editor.drawing
     assert np.isclose(np.hypot(*(window.active_region().control_points_pixel[1] - window.active_region().control_points_pixel[0])), 4.0)
     window.close(); app.processEvents()
+
+
+def test_histogram_sequence_uses_requested_range_and_real_times(tmp_path) -> None:
+    dataset = _known_folder(tmp_path)
+    regions = [RegionGeometry.circle("R1", (10, 10), 3)]
+    result = region_histogram_sequence(dataset, regions, 0, 2, 2, 0.5)
+    assert result.frame_indices.tolist() == [0, 2]
+    assert result.n_frames == 2
+    assert [item.frame_index for item in result.results] == [0, 2]
+    assert result.results[1].time is not None
+    assert result.results[1].time.isot.startswith("2026-01-01T00:00:02")
+
+
+def test_region_history_restores_overwritten_result_and_sequence(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(); dataset = _known_folder(tmp_path); window._install_dataset(dataset)
+    region = RegionGeometry.circle("R1", (10, 10), 3)
+    window.regions.append(region)
+    window.region_panel.regions.addItem(window._marker_item(region.name, True, region.id))
+    trend = analyze_region_trends(dataset, [region], "mean")
+    histogram = region_histograms(dataset.get_frame(0), [region], dataset.get_wcs(0), 0, 0.5)
+    window._record_history("trend", main_tab=2, left_tab=3, region_result=trend)
+    trend_entry = window._history_entries[0]["id"]
+    window._record_history("hist", main_tab=2, left_tab=3, region_result=histogram)
+    window._open_history_entry(trend_entry)
+    assert window.region_result is not trend
+    assert window.region_result.statistic == "mean"
+    sequence = region_histogram_sequence(dataset, [region], 0, 2, 1, 0.5)
+    window._record_history("sequence", main_tab=2, left_tab=3, histogram_sequence=sequence)
+    sequence_entry = window._history_entries[0]["id"]
+    window._open_history_entry(sequence_entry)
+    assert window._region_hist_sequence is not None
+    assert not window.region_histogram_player.isHidden()
+    window.close(); app.processEvents()
+
+
+def test_region_histogram_sequence_exports_playable_mp4(tmp_path) -> None:
+    dataset = _known_folder(tmp_path)
+    region = RegionGeometry.circle("R1", (10, 10), 3)
+    sequence = region_histogram_sequence(dataset, [region], 0, 2, 2, 0.5)
+    movie = tmp_path / "region_histograms.mp4"
+    export_region_histogram_animation(sequence, movie, 2.0, (320, 240))
+    assert movie.is_file() and movie.stat().st_size > 1000

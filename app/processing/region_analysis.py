@@ -35,6 +35,21 @@ class RegionHistogramResult:
     time: Time | None = None
 
 
+@dataclass
+class RegionHistogramSequence:
+    """A frame-ordered histogram series suitable for review and animation."""
+
+    results: list[RegionHistogramResult]
+    frame_indices: np.ndarray
+    start_frame: int
+    end_frame: int
+    step: int
+
+    @property
+    def n_frames(self) -> int:
+        return len(self.results)
+
+
 def analyze_region_trends(
     dataset: TimeSeriesDataset,
     regions: list[RegionGeometry],
@@ -109,3 +124,48 @@ def region_histograms(
         region_colors=[item.display_color for item in regions if item.complete and item.visible],
         time=time,
     )
+
+
+def region_histogram_sequence(
+    dataset: TimeSeriesDataset,
+    regions: list[RegionGeometry],
+    start_frame: int,
+    end_frame: int,
+    step: int,
+    bin_width: float,
+    progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> RegionHistogramSequence:
+    """Calculate selected-region histograms for an inclusive frame range.
+
+    Histogram bins retain the requested physical data-value width. Each frame
+    therefore remains a faithful distribution even when its value range changes;
+    the animation renderer applies shared axes limits to avoid visual jitter.
+    """
+    if dataset.n_frames < 1:
+        raise ValueError("The dataset has no frames.")
+    start = max(0, min(int(start_frame), dataset.n_frames - 1))
+    end = max(0, min(int(end_frame), dataset.n_frames - 1))
+    if start > end:
+        start, end = end, start
+    stride = max(1, int(step))
+    indices = np.arange(start, end + 1, stride, dtype=int)
+    results: list[RegionHistogramResult] = []
+    for position, frame_index in enumerate(indices, start=1):
+        if cancelled and cancelled():
+            raise InterruptedError("Region histogram sequence cancelled by user.")
+        results.append(
+            region_histograms(
+                dataset.get_frame(int(frame_index)),
+                regions,
+                dataset.get_wcs(int(frame_index)),
+                int(frame_index),
+                bin_width,
+                time=dataset.get_time(int(frame_index)),
+            )
+        )
+        if progress:
+            progress(position, len(indices))
+    if not results or not results[0].region_names:
+        raise ValueError("Select at least one completed closed region.")
+    return RegionHistogramSequence(results, indices, start, end, stride)

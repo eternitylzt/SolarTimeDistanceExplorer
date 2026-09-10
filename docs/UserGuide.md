@@ -129,6 +129,11 @@ contrast and never modify the exported TD matrix.
     tick format, line style/width, marker, linear/log scales, grid, title/axis/tick
     and legend sizes,
     then save PNG/PDF/EPS/SVG/TIFF. Every curve keeps its region outline colour.
+11. To inspect changing distributions, set inclusive Start/End/Step frames and
+    click the range-histogram button. Alternatively, zoom the TD plot and use
+    **Use current TD time range**. The Region page then shows Previous/Play/Next,
+    a slider, exact frame time, and MP4/GIF export. Movie axes remain fixed to
+    avoid artificial changes caused by per-frame autoscaling.
 
 ## Saving work
 
@@ -157,10 +162,11 @@ AIA-prepared FITS files while retaining the open dataset and currently displayed
 frame. Subsequent frame access is intentionally read/prepared again.
 
 View → Drawing History lists the most recent map loads, completed Slits and
-Regions, TD results, region trends, and histograms. Click an item to return to
-the corresponding page; marker entries also reselect that marker while its
-dataset remains open. The default maximum is 20 and can be changed from the
-bottom of the same menu.
+Regions, TD results, region trends, histograms, and histogram sequences. Region
+analysis entries retain lightweight numerical snapshots, so an earlier trend or
+distribution can be restored after a later plot reused the canvas. Marker entries
+also reselect that marker while its dataset remains open. The default maximum is
+20 and can be changed from the bottom of the same menu.
 
 ## Troubleshooting
 

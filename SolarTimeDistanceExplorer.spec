@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller onedir recipe for the Windows desktop application."""
+"""PyInstaller onedir recipe for Windows, Linux and macOS."""
+
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
 
@@ -57,7 +59,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon="resources/stde_icon.ico",
+    icon="resources/stde_icon.ico" if sys.platform == "win32" else None,
 )
 coll = COLLECT(
     exe,
@@ -68,3 +70,10 @@ coll = COLLECT(
     upx_exclude=[],
     name="SolarTimeDistanceExplorer",
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="SolarTimeDistanceExplorer.app",
+        bundle_identifier="com.zhentongli.solartimedistanceexplorer",
+    )

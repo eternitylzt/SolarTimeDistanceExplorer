@@ -20,6 +20,7 @@ from app.data.base import TimeSeriesDataset
 from app.paths.base import PathGeometry
 from app.paths.geometry import sample_path_geometry
 from app.plotting.normalization import make_norm
+from app.processing.region_analysis import RegionHistogramSequence
 from app.regions.base import RegionGeometry
 from app.utils.exceptions import ExportError
 
@@ -351,5 +352,117 @@ def export_animation(
         raise
     except Exception as exc:
         raise ExportError(f"动画导出失败：{exc}") from exc
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def export_region_histogram_animation(
+    sequence: RegionHistogramSequence,
+    path: str | Path,
+    fps: float,
+    output_size: tuple[int, int] = (1280, 720),
+    *,
+    plot_type: str = "bar",
+    y_unit: str = "count",
+    line_width: float = 1.5,
+    line_style: str = "-",
+    title_size: float = 12.0,
+    axis_label_size: float = 11.0,
+    tick_label_size: float = 9.0,
+    legend_fontsize: float = 11.0,
+    grid: bool = True,
+    progress: Callable[[int, int], None] | None = None,
+) -> None:
+    """Render and encode a true-time region-histogram sequence as GIF/MP4.
+
+    All frames share the same x/y limits so apparent distribution changes are
+    not caused by axes autoscaling. Region colours remain identical to the Map.
+    """
+    target = Path(path).resolve()
+    suffix = target.suffix.lower()
+    if suffix not in {".gif", ".mp4"}:
+        raise ExportError("区域直方图动画请选择 .mp4 或 .gif。")
+    if not sequence.results:
+        raise ExportError("区域直方图序列为空。")
+    if fps <= 0:
+        raise ExportError("帧率必须大于 0。")
+    width, height = max(320, int(output_size[0])), max(240, int(output_size[1]))
+    edge_arrays = [edges for result in sequence.results for edges in result.edges if len(edges)]
+    if not edge_arrays:
+        raise ExportError("区域直方图没有可绘制的数据。")
+    x_limits = (
+        min(float(np.nanmin(edges)) for edges in edge_arrays),
+        max(float(np.nanmax(edges)) for edges in edge_arrays),
+    )
+    maximum = 0.0
+    for result in sequence.results:
+        for raw in result.counts:
+            counts = np.asarray(raw, dtype=float)
+            if y_unit == "frequency" and counts.sum() > 0:
+                counts = counts / counts.sum()
+            if counts.size:
+                maximum = max(maximum, float(np.nanmax(counts)))
+    y_limits = (0.0, maximum * 1.08 if maximum > 0 else 1.0)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = _ffmpeg_executable()
+    staging = Path(tempfile.mkdtemp(prefix=".stde_region_hist_", dir=target.parent))
+    encoded = staging / f"encoded{suffix}"
+    try:
+        for position, result in enumerate(sequence.results):
+            dpi = 100.0
+            figure = Figure(figsize=(width / dpi, height / dpi), dpi=dpi, layout="constrained")
+            canvas = FigureCanvasAgg(figure)
+            axes = figure.add_subplot(111)
+            entries = list(zip(result.region_names, result.edges, result.counts, result.region_colors, strict=True))
+            entries.sort(key=lambda item: float(np.max(item[2])) if len(item[2]) else 0.0, reverse=True)
+            for z_index, (name, edges, raw_counts, color) in enumerate(entries):
+                counts = np.asarray(raw_counts, dtype=float)
+                if y_unit == "frequency" and counts.sum() > 0:
+                    counts = counts / counts.sum()
+                centers = (edges[:-1] + edges[1:]) / 2.0
+                if plot_type == "line":
+                    axes.plot(centers, counts, drawstyle="steps-mid", color=color,
+                              linewidth=line_width, linestyle=line_style, label=name)
+                else:
+                    axes.bar(centers, counts, width=edges[1:] - edges[:-1], align="center",
+                             color=color, edgecolor=color, alpha=0.46, linewidth=line_width,
+                             linestyle=line_style, label=name, zorder=3 + z_index)
+            observation = result.time.utc.isot if result.time is not None else f"Frame {result.frame_index + 1}"
+            axes.set_title(f"Region Distribution — {observation}; Bin Width = {result.bin_width:g}", fontsize=title_size)
+            axes.set_xlabel("Pixel Value", fontsize=axis_label_size)
+            axes.set_ylabel("Relative Frequency" if y_unit == "frequency" else "Count", fontsize=axis_label_size)
+            axes.set_xlim(*x_limits); axes.set_ylim(*y_limits)
+            axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
+            axes.minorticks_on()
+            if grid:
+                axes.grid(True, which="both", alpha=0.25)
+            if entries:
+                axes.legend(fontsize=legend_fontsize)
+            canvas.draw()
+            rgb = np.ascontiguousarray(np.asarray(canvas.buffer_rgba())[..., :3])
+            if suffix == ".mp4":
+                rgb = _pad_even(rgb)
+            Image.fromarray(rgb).save(staging / f"frame_{position:06d}.png", "PNG")
+            if progress:
+                progress(position + 1, len(sequence.results) + 1)
+        command = [
+            str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+            "-framerate", f"{fps:g}", "-start_number", "0",
+            "-i", str(staging / "frame_%06d.png"),
+        ]
+        if suffix == ".mp4":
+            command.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart"])
+        else:
+            command.extend(["-filter_complex", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", "-loop", "0"])
+        command.append(str(encoded))
+        _run_ffmpeg(command)
+        _verify_video(ffmpeg, encoded)
+        os.replace(encoded, target)
+        if progress:
+            progress(len(sequence.results) + 1, len(sequence.results) + 1)
+    except ExportError:
+        raise
+    except Exception as exc:
+        raise ExportError(f"区域直方图动画导出失败：{exc}") from exc
     finally:
         shutil.rmtree(staging, ignore_errors=True)

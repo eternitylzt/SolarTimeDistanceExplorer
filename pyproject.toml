@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solar-time-distance-explorer"
-version = "0.8.3"
+version = "0.9.0"
 description = "Desktop FITS/SAV time-distance analysis for solar physics"
 authors = [{name = "Zhentong Li", email = "eternitylzt@gmail.com"}]
 requires-python = ">=3.11"

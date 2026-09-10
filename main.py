@@ -1,4 +1,4 @@
-"""Windows entry point for Solar Time–Distance Explorer."""
+"""Cross-platform entry point for Solar Time–Distance Explorer."""
 
 from app.bootstrap import run
 

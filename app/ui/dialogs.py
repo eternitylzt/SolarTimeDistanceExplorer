@@ -101,6 +101,38 @@ class AnimationExportDialog(QDialog):
         }
 
 
+class HistogramAnimationExportDialog(QDialog):
+    """Collect compact settings for a region-histogram movie or GIF."""
+
+    def __init__(self, default_fps: float, parent: object | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("区域直方图动画导出设置")
+        layout = QFormLayout(self)
+        self.resolution = QComboBox(); self.resolution.addItems(["1280 × 720", "1920 × 1080", "自定义"])
+        self.width = QSpinBox(); self.width.setRange(320, 7680); self.width.setValue(1280)
+        self.height = QSpinBox(); self.height.setRange(240, 4320); self.height.setValue(720)
+        self.fps = QDoubleSpinBox(); self.fps.setRange(0.1, 60.0)
+        self.fps.setValue(default_fps); self.fps.setSuffix(" fps")
+        self.resolution.currentIndexChanged.connect(self._resolution_changed)
+        layout.addRow("分辨率", self.resolution)
+        layout.addRow("宽度", self.width); layout.addRow("高度", self.height)
+        layout.addRow("帧率", self.fps)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+        self._resolution_changed(0)
+
+    def _resolution_changed(self, index: int) -> None:
+        preset = {0: (1280, 720), 1: (1920, 1080)}.get(index)
+        custom = index == 2
+        self.width.setEnabled(custom); self.height.setEnabled(custom)
+        if preset:
+            self.width.setValue(preset[0]); self.height.setValue(preset[1])
+
+    def settings(self) -> dict[str, object]:
+        return {"size": (self.width.value(), self.height.value()), "fps": self.fps.value()}
+
+
 class ViewExportDialog(QDialog):
     """Choose which publication annotations are retained in a saved view."""
 

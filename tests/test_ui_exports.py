@@ -188,6 +188,15 @@ def test_velocity_ui_supports_all_and_per_marker_background(monkeypatch) -> None
     assert window.td_canvas.measurement_style(1)[2] == "transparent"
     assert window.td_canvas.measurement_style(2)[2] != "transparent"
 
+    window.slope_selection.setCurrentIndex(window.slope_selection.findData(1))
+    window.slope_fontsize.setValue(17.0)
+    assert window.td_canvas.measurement_style(1)[3] == 17.0
+    assert window.td_canvas.measurement_style(2)[3] != 17.0
+
+    window.slope_selection.setCurrentIndex(window.slope_selection.findData(-1))
+    window.slope_fontsize.setValue(13.0)
+    assert all(window.td_canvas.measurement_style(i)[3] == 13.0 for i in (1, 2))
+
     window.slope_selection.setCurrentIndex(window.slope_selection.findData(-1))
     monkeypatch.setattr("app.ui.main_window.QColorDialog.getColor", lambda *_args, **_kwargs: QColor("#123456"))
     window._choose_slope_background()
