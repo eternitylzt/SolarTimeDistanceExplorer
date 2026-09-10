@@ -1,4 +1,4 @@
-# Solar Time–Distance Explorer 0.9.0
+# Solar Time–Distance Explorer 0.9.1
 
 - Velocity annotation font size now follows `Selected` (`Next`, `All`, or one `v_n`) just like annotation colour.
 - Region distributions can be calculated over an inclusive frame/time range, reviewed with a slider and Play/Pause controls, and exported as MP4 or GIF.

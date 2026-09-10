@@ -9,14 +9,14 @@ export.
 **Author:** Zhentong Li · eternitylzt@gmail.com ·
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Current version: **0.9.0** — functional research preview.
+> Current version: **0.9.1** — functional research preview.
 
 ## 中文说明
 
 ### 下载与运行
 
 在 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases)
-Windows 用户下载 `SolarTimeDistanceExplorer-0.9.0-Windows-x64.zip`。完整解压后运行
+Windows 用户下载 `SolarTimeDistanceExplorer-0.9.1-Windows-x64.zip`。完整解压后运行
 `SolarTimeDistanceExplorer.exe`，无需另装 Python。请保留 EXE 与 `_internal`
 目录的相对位置。
 
@@ -74,7 +74,7 @@ Windows 用户下载 `SolarTimeDistanceExplorer-0.9.0-Windows-x64.zip`。完整�
 ### 多平台基础
 
 - Windows x64：主要验证平台，Release 提供完整 onedir ZIP。
-- Linux x64：GitHub Actions 在 Ubuntu 原生构建 tar.gz。
+- Linux x64：GitHub Actions 在 Ubuntu 原生构建 tar.gz；目标系统需有常规 OpenGL/EGL/XCB 桌面运行库。
 - macOS Apple Silicon / Intel：分别在对应 runner 原生构建 `.app` ZIP。
 
 Linux/macOS 包由 `.github/workflows/multiplatform-release.yml` 在对应系统构建，
@@ -108,7 +108,7 @@ Linux/macOS 包由 `.github/workflows/multiplatform-release.yml` 在对应系统
 
 ### Download
 
-Download `SolarTimeDistanceExplorer-0.9.0-Windows-x64.zip` from
+Download `SolarTimeDistanceExplorer-0.9.1-Windows-x64.zip` from
 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases),
 extract the complete folder, and run `SolarTimeDistanceExplorer.exe`. Python is
 not required. Keep the EXE beside its `_internal` directory.
