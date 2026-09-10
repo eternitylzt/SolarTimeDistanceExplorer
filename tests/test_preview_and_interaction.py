@@ -49,6 +49,7 @@ def test_new_line_remains_in_drawing_mode_and_accepts_two_clicks(tmp_path) -> No
     window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
     assert window.path_panel.coordinate_mode.currentData() == "world"
     assert window.path_panel.tracking.currentData() == "world_fixed"
+    assert window.path_panel.width_unit.currentText() == "arcsec"
     assert window.path_panel.distance_unit.currentText() == "arcsec"
     assert window.path_panel.normalize_exposure.isChecked()
     window.path_panel.path_type.setCurrentText("line")
@@ -244,6 +245,44 @@ def test_slit_native_actions_delete_then_draw_unique_mixed_shapes(tmp_path) -> N
     assert len({item.name for item in window.paths}) == len(window.paths)
     assert window.paths[-1].path_type == "smooth" and window.paths[-1].complete
     assert window.path_panel.paths.count() == len(window.paths)
+    window.close(); app.processEvents()
+
+
+def test_renamed_replacement_slit_keeps_list_id_and_remains_deletable(tmp_path) -> None:
+    """Regression: renaming S3 to a freed S2 must update one atomic list/model row."""
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._install_dataset(FitsImageDataset(_single_image(tmp_path)))
+
+    def finish_line(y: float) -> None:
+        window.new_path("line")
+        for x in (1.0, 7.0):
+            window.image_canvas.mouse_pressed.emit(
+                SimpleNamespace(button=MouseButton.LEFT, xdata=x, ydata=y, dblclick=False)
+            )
+            app.processEvents()
+
+    finish_line(2.0)  # S1
+    finish_line(4.0)  # S2
+    window.path_panel.paths.setCurrentRow(1)
+    window.path_panel.delete.click(); app.processEvents()
+    finish_line(6.0)  # monotonic S3
+    replacement = window.active_path()
+    assert replacement is not None and replacement.name == "S3"
+
+    window.path_panel.name.setText("S2")
+    window.path_panel.name.editingFinished.emit(); app.processEvents()
+    row = window._path_row(replacement.id)
+    assert row == 1
+    assert replacement.name == "S2"
+    assert window.path_panel.paths.item(row).text() == "S2"
+    assert window.path_panel.paths.item(row).data(Qt.ItemDataRole.UserRole) == replacement.id
+
+    window.path_panel.delete.click(); app.processEvents()
+    assert [item.name for item in window.paths] == ["S1"]
+    assert window.path_panel.paths.count() == 1
+    finish_line(7.0)
+    assert [item.name for item in window.paths] == ["S1", "S4"]
     window.close(); app.processEvents()
 
 

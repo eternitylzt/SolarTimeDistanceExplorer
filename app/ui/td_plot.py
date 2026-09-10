@@ -46,7 +46,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self.slope_fontsize = 10.0
         self.slope_text_color = "#ffffff"
         self.slope_background_color = "#000000"
-        self.slope_velocity_unit = "auto"
+        self.slope_velocity_unit = "km"
         self.slope_auto_colors = True
         self.slope_precision = 1
         self._true_time = True
@@ -217,6 +217,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             group["text_color"] = color
         color = str(group.get("line_color", self.slope_color))
         text_color = str(group.get("text_color", color))
+        background_color = str(group.get("background_color", self.slope_background_color))
         for artist in group["artists"]:
             if isinstance(artist, Text):
                 artist.set_color(text_color)
@@ -224,8 +225,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
                 artist.set_text(self._velocity_text(group["delta_s"], group["delta_t"], group["index"]))
                 patch = artist.get_bbox_patch()
                 if patch is not None:
-                    transparent = self.slope_background_color.lower() == "transparent"
-                    patch.set_facecolor("none" if transparent else self.slope_background_color)
+                    transparent = background_color.lower() == "transparent"
+                    patch.set_facecolor("none" if transparent else background_color)
                     patch.set_alpha(0.0 if transparent else 0.55)
                     patch.set_edgecolor(color)
             elif isinstance(artist, Line2D):
@@ -237,31 +238,68 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
     def measurement_count(self) -> int:
         return len(self._measurement_groups)
 
-    def measurement_colors(self, index: int) -> tuple[str, str] | None:
-        group = next((item for item in self._measurement_groups if item["index"] == index), None)
+    def measurement_style(self, index: int) -> tuple[str, str, str] | None:
+        """Return line, text and background colours for one marker or defaults."""
+        if index == 0:
+            return self.slope_color, self.slope_text_color, self.slope_background_color
+        if index == -1:
+            group = self._measurement_groups[0] if self._measurement_groups else None
+        else:
+            group = next(
+                (item for item in self._measurement_groups if item["index"] == index), None
+            )
         if group is None:
             return None
-        return str(group["line_color"]), str(group["text_color"])
+        return (
+            str(group["line_color"]),
+            str(group["text_color"]),
+            str(group.get("background_color", self.slope_background_color)),
+        )
+
+    def measurement_colors(self, index: int) -> tuple[str, str] | None:
+        """Compatibility accessor for the line/text colour pair."""
+        style = self.measurement_style(index)
+        return None if style is None else style[:2]
 
     def select_measurement(self, index: int) -> None:
         """Select a completed velocity marker for per-marker styling."""
-        valid = any(item["index"] == index for item in self._measurement_groups)
+        valid = (index == -1 and bool(self._measurement_groups)) or any(
+            item["index"] == index for item in self._measurement_groups
+        )
         self._selected_measurement_index = index if valid else 0
         self.measurement_selected.emit(self._selected_measurement_index)
+
+    def set_measurement_style(
+        self,
+        index: int,
+        *,
+        line_color: str | None = None,
+        text_color: str | None = None,
+        background_color: str | None = None,
+    ) -> None:
+        """Change one velocity marker, or all markers when ``index == -1``."""
+        groups = (
+            list(self._measurement_groups)
+            if index == -1
+            else [item for item in self._measurement_groups if item["index"] == index]
+        )
+        if not groups:
+            return
+        for group in groups:
+            if line_color is not None:
+                group["line_color"] = line_color
+            if text_color is not None:
+                group["text_color"] = text_color
+            if background_color is not None:
+                group["background_color"] = background_color
+            self._style_measurement_group(group)
+        self.draw_idle()
 
     def set_measurement_colors(
         self, index: int, *, line_color: str | None = None, text_color: str | None = None
     ) -> None:
-        """Change only one selected measurement when automatic colours are disabled."""
-        group = next((item for item in self._measurement_groups if item["index"] == index), None)
-        if group is None:
-            return
-        if line_color is not None:
-            group["line_color"] = line_color
-        if text_color is not None:
-            group["text_color"] = text_color
-        self._style_measurement_group(group)
-        self.draw_idle()
+        """Compatibility wrapper for callers that only change line/text colours."""
+        self.set_measurement_style(index, line_color=line_color, text_color=text_color)
 
     def clear_measurements(self) -> None:
         """Reliably remove all tagged slope artists from every current axes."""
@@ -348,6 +386,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             "delta_t": delta_t,
             "line_color": color,
             "text_color": text_color,
+            "background_color": self.slope_background_color,
             "line": lines[0],
             "label": label,
             "artists": [*lines, label],

@@ -31,7 +31,7 @@
    image space to deselect all handles while keeping checked overlays visible for export.
    Use Help → Slit / Region Drawing Help for the same instructions without permanently
    occupying the control panel.
-6. In Slit Parameters set Slit width = 5, Unit = pixel, Integration = Mean,
+6. In Slit Parameters set Slit width = 5, Unit = arcsec (the WCS default), Integration = Mean,
    Interpolation = Linear. Enable Show slit width to preview the
    actual numerical strip as a live semi-transparent band; the solid centreline
    thickness is only a display style.
@@ -41,7 +41,7 @@
    TD distance axis defaults to arcsec for valid WCS. Select pixel if detector
    distance is preferred; km and Mm are also available when angular scale is valid.
 9. In Time–Distance, leave True observational time on for irregular cadence.
-   Use Measure slope, click two ridge points, and read Δt, Δs, velocity from
+   Use Measure Velocity, click two ridge points, and read Δt, Δs, velocity from
    the status bar. Clear slope removes all measurement markers. Time labels can
     be HH:MM:SS, HH:MM, full date/time, or a custom `strftime` format.
     The TD controls also set axis-title/tick font size and whether the x-axis
@@ -50,10 +50,12 @@
     measurements and existing visible markers. Auto colors labels successive
     measurements v₁, v₂, … with matching line/text colours and no persistent
     endpoint circles. Drag a velocity label to reposition it. Disable Auto
-    colors and choose the desired v_n under Selected—or click its line/label—
-    before setting its line and text colours. Velocity unit can
-    be changed independently of the plotted distance axis, and the annotation
-    background may be transparent. If the x-axis title includes Start time,
+    colors and choose All or the desired v_n under Selected—or click its
+    line/label—before setting line, text and Text Background colours. Changing
+    Line first matches Text to the same colour; Text can then be changed alone.
+    Background colour/transparency is stored separately for every v_n. Velocity
+    defaults to km/s and can be changed independently of the plotted distance
+    axis. If the x-axis title includes Start time,
     zooming or panning updates it to the visible interval's left edge.
 10. Edit the English plot title/axis labels, colormap/stretch/range, grid,
     colorbar, aspect, line style and font sizes as needed. Export the panel using

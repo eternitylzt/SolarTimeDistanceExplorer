@@ -264,7 +264,6 @@ class MainWindow(QMainWindow):
         self.slope_text_color = QPushButton("#ffffff")
         self.slope_background = QPushButton("#000000")
         self.slope_background_transparent, _ = self._checkbox("Transparent", False)
-        self.slope_background_transparent.toggled.connect(self.slope_background.setDisabled)
         self.slope_auto_colors, _ = self._checkbox("Auto colors", True)
         self.slope_color.setDisabled(True); self.slope_text_color.setDisabled(True)
         self.slope_selection, _ = self._combo([("Next measurement", 0)])
@@ -273,6 +272,7 @@ class MainWindow(QMainWindow):
             ("Same as distance axis", "auto"), ("pixel/s", "pixel"),
             ("arcsec/s", "arcsec"), ("km/s", "km"), ("Mm/s", "Mm"),
         ])
+        self._set_combo_value(self.slope_velocity_unit, "km")
         self.slope_width = QDoubleSpinBox(); self.slope_width.setRange(0.5, 8); self.slope_width.setValue(1.5)
         self.slope_linestyle, _ = self._combo([("Solid", "-"), ("Dashed", "--"), ("Dash-dot", "-."), ("Dotted", ":")])
         self.slope_fontsize = QDoubleSpinBox(); self.slope_fontsize.setRange(6, 30); self.slope_fontsize.setValue(10); self.slope_fontsize.setSuffix(" pt")
@@ -285,7 +285,7 @@ class MainWindow(QMainWindow):
         self.slope_linestyle.setFixedWidth(112)
         td_export = QPushButton("导出时距图")
         td_data = QPushButton("导出时距数据")
-        slope = QPushButton("测量斜率/速度")
+        slope = QPushButton("测量速度")
         clear_slope = QPushButton("清除斜率标记")
         td_export.clicked.connect(self.export_td_figure)
         td_data.clicked.connect(self.export_td_data)
@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
         self.slope_fontsize.valueChanged.connect(self._apply_slope_style)
         self.slope_precision.valueChanged.connect(self._apply_slope_style)
         self.slope_velocity_unit.currentIndexChanged.connect(self._apply_slope_style)
-        self.slope_background_transparent.toggled.connect(self._apply_slope_style)
+        self.slope_background_transparent.toggled.connect(self._slope_background_transparency_changed)
         self.slope_auto_colors.toggled.connect(self._slope_auto_colors_changed)
         td_controls.addWidget(QLabel("Colormap"))
         td_controls.addWidget(self.td_cmap)
@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
         td_style.addWidget(QLabel("Aspect")); td_style.addWidget(self.td_aspect)
         td_style.addStretch(1)
         td_layout.addLayout(td_style)
-        slope_group = QGroupBox("Slope / Velocity Measurement")
+        slope_group = QGroupBox("Velocity Measurement")
         slope_group_layout = QVBoxLayout(slope_group)
         slope_actions = QHBoxLayout()
         slope_actions.addWidget(self.slope_auto_colors)
@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
         slope_style.addStretch(1)
         slope_group_layout.addLayout(slope_style)
         slope_annotation_style = QHBoxLayout()
-        slope_annotation_style.addWidget(QLabel("Background")); slope_annotation_style.addWidget(self.slope_background)
+        slope_annotation_style.addWidget(QLabel("Text Background")); slope_annotation_style.addWidget(self.slope_background)
         slope_annotation_style.addWidget(self.slope_background_transparent)
         slope_annotation_style.addStretch(1)
         slope_annotation_style.addWidget(QLabel("Velocity unit")); slope_annotation_style.addWidget(self.slope_velocity_unit)
@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
         td_actions.addWidget(td_export); td_actions.addWidget(td_data); td_actions.addStretch(1)
         td_layout.addLayout(td_actions)
         self._td_range_mode_changed()
+        self._sync_selected_slope_controls()
         self.td_navigation = NavigationToolbar2QT(self.td_canvas, td_tab, coordinates=True)
         self._install_layout_action(self.td_navigation, self.td_canvas, "td")
         td_layout.addWidget(self.td_navigation)
@@ -525,6 +526,14 @@ class MainWindow(QMainWindow):
             number += 1
         setattr(self, attribute, number + 1)
         return f"{prefix}{number}"
+
+    def _path_row(self, marker_id: str) -> int:
+        """Find a Slit row by stable UUID, never by array-backed value equality."""
+        return next((row for row, item in enumerate(self.paths) if item.id == marker_id), -1)
+
+    def _region_row(self, marker_id: str) -> int:
+        """Find a Region row by stable UUID, never by array-backed value equality."""
+        return next((row for row, item in enumerate(self.regions) if item.id == marker_id), -1)
 
     def _install_layout_action(self, toolbar: NavigationToolbar2QT, canvas: Any, key: str) -> None:
         """Replace Matplotlib's ineffective constrained-layout control and restore saved margins."""
@@ -815,12 +824,17 @@ class MainWindow(QMainWindow):
             )
 
     def _choose_slope_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self.slope_color.text()), self, "选择斜率线颜色")
+        color = QColorDialog.getColor(QColor(self.slope_color.text()), self, "选择速度线颜色")
         if color.isValid():
             self._set_color_button(self.slope_color, color.name())
+            # A line colour change deliberately resets its annotation text to
+            # the same colour. The user may then customise Text independently.
+            self._set_color_button(self.slope_text_color, color.name())
             index = int(self.slope_selection.currentData() or 0)
-            if index and not self.slope_auto_colors.isChecked():
-                self.td_canvas.set_measurement_colors(index, line_color=color.name())
+            if not self.slope_auto_colors.isChecked() and index != 0:
+                self.td_canvas.set_measurement_style(
+                    index, line_color=color.name(), text_color=color.name()
+                )
             self._apply_slope_style()
 
     def _choose_slope_text_color(self) -> None:
@@ -830,8 +844,8 @@ class MainWindow(QMainWindow):
         if color.isValid():
             self._set_color_button(self.slope_text_color, color.name())
             index = int(self.slope_selection.currentData() or 0)
-            if index and not self.slope_auto_colors.isChecked():
-                self.td_canvas.set_measurement_colors(index, text_color=color.name())
+            if not self.slope_auto_colors.isChecked() and index != 0:
+                self.td_canvas.set_measurement_style(index, text_color=color.name())
             self._apply_slope_style()
 
     def _choose_slope_background(self) -> None:
@@ -840,8 +854,23 @@ class MainWindow(QMainWindow):
         )
         if color.isValid():
             self._set_color_button(self.slope_background, color.name(), background=True)
+            self.slope_background_transparent.blockSignals(True)
             self.slope_background_transparent.setChecked(False)
+            self.slope_background_transparent.blockSignals(False)
+            index = int(self.slope_selection.currentData() or 0)
+            if not self.slope_auto_colors.isChecked() and index != 0:
+                self.td_canvas.set_measurement_style(index, background_color=color.name())
             self._apply_slope_style()
+            self._sync_selected_slope_controls()
+
+    def _slope_background_transparency_changed(self, checked: bool) -> None:
+        """Apply transparency only to Next, All, or the selected velocity marker."""
+        index = int(self.slope_selection.currentData() or 0)
+        background = "transparent" if checked else self.slope_background.text()
+        if not self.slope_auto_colors.isChecked() and index != 0:
+            self.td_canvas.set_measurement_style(index, background_color=background)
+        self._apply_slope_style()
+        self._sync_selected_slope_controls()
 
     def _slope_auto_colors_changed(self, checked: bool) -> None:
         self._apply_slope_style()
@@ -853,9 +882,13 @@ class MainWindow(QMainWindow):
         self.slope_selection.blockSignals(True)
         self.slope_selection.clear()
         self.slope_selection.addItem("Next measurement", 0)
+        if count:
+            self.slope_selection.addItem("All", -1)
         for index in range(1, count + 1):
             self.slope_selection.addItem(f"v_{index}", index)
-        self.slope_selection.setCurrentIndex(count if count else 0)
+        self.slope_selection.setCurrentIndex(
+            self.slope_selection.findData(count) if count else 0
+        )
         self.slope_selection.blockSignals(False)
         self._sync_selected_slope_controls()
 
@@ -875,20 +908,41 @@ class MainWindow(QMainWindow):
 
     def _sync_selected_slope_controls(self) -> None:
         index = int(self.slope_selection.currentData() or 0)
-        colors = self.td_canvas.measurement_colors(index)
-        if colors is not None:
-            self._set_color_button(self.slope_color, colors[0])
-            self._set_color_button(self.slope_text_color, colors[1])
-        editable = not self.slope_auto_colors.isChecked() and colors is not None
+        style = self.td_canvas.measurement_style(index)
+        if style is not None:
+            self._set_color_button(self.slope_color, style[0])
+            self._set_color_button(self.slope_text_color, style[1])
+            self._set_color_button(self.slope_background, style[2], background=True)
+            self.slope_background_transparent.blockSignals(True)
+            self.slope_background_transparent.setChecked(style[2].lower() == "transparent")
+            self.slope_background_transparent.blockSignals(False)
+        editable = not self.slope_auto_colors.isChecked() and style is not None
+        self.slope_selection.setEnabled(not self.slope_auto_colors.isChecked())
         self.slope_color.setEnabled(editable)
         self.slope_text_color.setEnabled(editable)
+        self.slope_background_transparent.setEnabled(editable)
+        self.slope_background.setEnabled(
+            editable and not self.slope_background_transparent.isChecked()
+        )
 
     def _apply_slope_style(self) -> None:
+        target = int(self.slope_selection.currentData() or 0)
+        defaults = self.td_canvas.measurement_style(0)
+        assert defaults is not None
+        if target == 0:
+            line_color = self.slope_color.text()
+            text_color = self.slope_text_color.text()
+            background = (
+                "transparent"
+                if self.slope_background_transparent.isChecked()
+                else self.slope_background.text()
+            )
+        else:
+            line_color, text_color, background = defaults
         self.td_canvas.set_slope_style(
-            self.slope_color.text(), self.slope_width.value(), self.slope_fontsize.value(),
+            line_color, self.slope_width.value(), self.slope_fontsize.value(),
             self._combo_value(self.slope_linestyle),
-            self.slope_text_color.text(), self.slope_precision.value(),
-            "transparent" if self.slope_background_transparent.isChecked() else self.slope_background.text(),
+            text_color, self.slope_precision.value(), background,
             self._combo_value(self.slope_velocity_unit), self.slope_auto_colors.isChecked(),
         )
 
@@ -918,7 +972,7 @@ class MainWindow(QMainWindow):
             "【切片坐标保存方式】“像素坐标”保存参考帧中的 x/y；“世界坐标/WCS”把切片保存为太阳物理坐标。它决定切片本身如何被记录。\n\n"
             "【逐帧跟踪方式】“固定像素位置”在每帧使用相同 x/y；“固定世界坐标”利用每帧 WCS 把同一太阳位置重新投影到像素，可适应 CRPIX/指向变化；“太阳自转跟踪”目前仍为实验功能。世界坐标保存通常应配合固定世界坐标跟踪。\n\n"
             "【时距图距离单位】只决定生成结果纵轴的累计弧长单位，可选 pixel、arcsec、km、Mm；不会改变切片保存或跟踪方式。km/Mm 仅在 WCS 与太阳距离足以可靠换算时可用。\n\n"
-            "【速度测量】相关选项集中在 Slope / Velocity Measurement。每两次点击生成一条不带端点圆圈的斜率线，自动标为 v₁、v₂…；文字可直接拖动。Auto colors 开启时使用不同默认颜色；关闭后，在 Selected 选择 v_n，或直接点击其线/文字，再单独修改该组 Line 与 Text 颜色。Velocity unit 可独立于 TD 纵轴选择 pixel/s、arcsec/s、km/s 或 Mm/s；涉及 pixel 的换算只在结果保存了可靠 WCS 像素尺度时可用。标注背景可设为 Transparent。\n\n"
+            "【速度测量】相关选项集中在 Velocity Measurement。每两次点击生成一条不带端点圆圈的速度线，自动标为 v₁、v₂…；文字可直接拖动，默认单位为 km/s。Auto colors 开启时各组自动配色且 Selected 不可用；关闭后可选择 All、v_n，或直接点击线/文字，分别设置 Line、Text 与 Text Background。修改 Line 时 Text 会先同步为同色，随后仍可单独调整 Text；Transparent 也只作用于当前选项。涉及 pixel 的换算只在结果保存了可靠 WCS 像素尺度时可用。\n\n"
             "【曲线平滑参数 s】仅用于平滑曲线。s=0 时样条经过控制点；s 越大，允许样条偏离控制点的平方残差越大，曲线通常越平滑。它不是像素宽度，也不是采样步长。建议先从 0 开始，小幅增加并观察预览。\n\n"
             "【Normalization】Percentile 按可设置的 Lower/Upper percentile 确定显示上下限（默认 1%/99%）；Manual 使用 vmin/vmax；Min–Max 使用当前数据极值；ZScale 使用天文图像常用的鲁棒线性范围。切换或修改参数会立即重绘，但不修改原数据。\n\n"
             "【动画导出】默认导出图像窗口当前显示的坐标范围；也可以改为完整图像。坐标轴、实际观测时间、标题、Colorbar、Slit 和 Region 均可分别选择是否写入每一帧。\n\n"
@@ -1007,7 +1061,7 @@ class MainWindow(QMainWindow):
         td_menu = self.menuBar().addMenu("时距图(&T)")
         td_menu.addAction("导出图像…", self.export_td_figure)
         td_menu.addAction("导出数值数据…", self.export_td_data)
-        td_menu.addAction("测量斜率/速度", lambda: self.td_canvas.enable_slope_measurement(True))
+        td_menu.addAction("测量速度", lambda: self.td_canvas.enable_slope_measurement(True))
         td_menu.addAction("清除斜率标记", self.td_canvas.clear_measurements)
         settings_menu = self.menuBar().addMenu("设置(&S)")
         settings_menu.addAction(self.keep_overlays_action)
@@ -1357,6 +1411,7 @@ class MainWindow(QMainWindow):
         world_available = bool(first_wcs is not None and first_wcs.has_celestial)
         self._set_combo_value(self.path_panel.coordinate_mode, "world" if world_available else "pixel")
         self._set_combo_value(self.path_panel.tracking, "world_fixed" if world_available else "pixel_fixed")
+        self.path_panel.width_unit.setCurrentText("arcsec" if world_available else "pixel")
         self.path_panel.distance_unit.setCurrentText("arcsec" if world_available else "pixel")
         self.path_panel.normalize_exposure.setChecked(True)
         self._set_combo_value(self.region_panel.coordinate_mode, "world" if world_available else "pixel")
@@ -1534,9 +1589,9 @@ class MainWindow(QMainWindow):
             self.path_editor.finish()
             return
         self.path_editor.cancel()
-        if geometry in self.paths:
-            row = self.paths.index(geometry)
-            self.paths.remove(geometry)
+        row = self._path_row(geometry.id)
+        if row >= 0:
+            self.paths.pop(row)
             self.path_panel.paths.blockSignals(True)
             self.path_panel.paths.takeItem(row)
             self.path_panel.paths.blockSignals(False)
@@ -1591,9 +1646,9 @@ class MainWindow(QMainWindow):
             self.region_editor.finish()
             return
         self.region_editor.cancel()
-        if geometry in self.regions:
-            row = self.regions.index(geometry)
-            self.regions.remove(geometry)
+        row = self._region_row(geometry.id)
+        if row >= 0:
+            self.regions.pop(row)
             self.region_panel.regions.takeItem(row)
         self.active_region_id = None
 
@@ -1673,9 +1728,9 @@ class MainWindow(QMainWindow):
         new_name = self.region_panel.name.text().strip()
         if new_name:
             geometry.name = new_name
-            row = self.regions.index(geometry)
+            row = self._region_row(geometry.id)
             item = self.region_panel.regions.item(row)
-            if item is not None and item.text() != new_name:
+            if row >= 0 and item is not None and item.text() != new_name:
                 item.setText(new_name)
         geometry.display_linewidth = self.region_panel.display_width.value()
         geometry.show_label = self.region_panel.show_label.isChecked()
@@ -1722,10 +1777,13 @@ class MainWindow(QMainWindow):
             active = next((entry for entry in self.regions if entry.id == marker_id), None)
         if active is None:
             return
-        row = self.regions.index(active)
+        row = self._region_row(active.id)
+        if row < 0:
+            self.statusBar().showMessage("区域列表状态异常；请重新选择区域。")
+            return
         self.region_editor.set_geometry(None)
         self.region_panel.regions.blockSignals(True)
-        self.regions.remove(active); self.region_panel.regions.takeItem(row)
+        self.regions.pop(row); self.region_panel.regions.takeItem(row)
         next_row = min(row, len(self.regions) - 1)
         self.region_panel.regions.setCurrentRow(next_row)
         self.region_panel.regions.blockSignals(False)
@@ -1955,9 +2013,9 @@ class MainWindow(QMainWindow):
         new_name = self.path_panel.name.text().strip() if include_name else ""
         if include_name and new_name:
             geometry.name = new_name
-            row = self.paths.index(geometry)
+            row = self._path_row(geometry.id)
             item = self.path_panel.paths.item(row)
-            if item is not None and item.text() != new_name:
+            if row >= 0 and item is not None and item.text() != new_name:
                 item.setText(new_name)
         geometry.display_linewidth = self.path_panel.display_width.value()
         geometry.show_label = self.path_panel.show_label.isChecked()
@@ -2015,10 +2073,13 @@ class MainWindow(QMainWindow):
         if active is None:
             self.statusBar().showMessage("请先在 Slit 列表中选择要删除的切片。")
             return
-        row = self.paths.index(active)
+        row = self._path_row(active.id)
+        if row < 0:
+            self.statusBar().showMessage("Slit 列表状态异常；请重新选择切片。")
+            return
         self.path_editor.set_geometry(None)
         self.path_panel.paths.blockSignals(True)
-        self.paths.remove(active)
+        self.paths.pop(row)
         self.path_panel.paths.takeItem(row)
         next_row = min(row, len(self.paths) - 1)
         self.path_panel.paths.setCurrentRow(next_row)
@@ -2518,7 +2579,7 @@ class MainWindow(QMainWindow):
             bool(settings.get("slope_background_transparent", False))
         )
         self._set_combo_value(
-            self.slope_velocity_unit, str(settings.get("slope_velocity_unit", "auto"))
+            self.slope_velocity_unit, str(settings.get("slope_velocity_unit", "km"))
         )
         self.slope_auto_colors.setChecked(bool(settings.get("slope_auto_colors", True)))
         self.slope_precision.setValue(int(settings.get("slope_precision", 1)))

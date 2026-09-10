@@ -10,6 +10,7 @@ import matplotlib.dates as mdates
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.lines import Line2D
 from astropy.time import Time
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 
 from app.paths.base import PathGeometry
@@ -150,6 +151,52 @@ def test_slope_markers_have_no_endpoints_and_keep_individual_colors() -> None:
     canvas._on_release(MouseEvent("button_release_event", canvas, target_x, target_y, button=1))
     assert label.get_position()[1] > old_position[1] + 0.5
     canvas.close(); app.processEvents()
+
+
+def test_velocity_ui_supports_all_and_per_marker_background(monkeypatch) -> None:
+    app = _application()
+    window = MainWindow()
+    result = TDResult(
+        matrix=np.arange(12, dtype=float).reshape(3, 4),
+        times=Time(["2026-01-01T12:50:00", "2026-01-01T12:50:10", "2026-01-01T12:50:25", "2026-01-01T12:51:00"]),
+        frame_indices=np.arange(4), distance=np.array([0.0, 2.0, 4.0]),
+        distance_unit="arcsec", path_id="test", metadata={"path": {"name": "S1"}},
+    )
+    window.td_canvas.show_result(result, true_time=True)
+    left, right = window.td_canvas.axes.get_xlim()
+    for first_y, second_y in ((1.0, 4.0), (4.0, 2.0)):
+        window.td_canvas.enable_slope_measurement(True)
+        window.td_canvas._on_press(SimpleNamespace(inaxes=window.td_canvas.axes, xdata=left, ydata=first_y))
+        window.td_canvas._on_press(SimpleNamespace(inaxes=window.td_canvas.axes, xdata=right, ydata=second_y))
+
+    window.slope_auto_colors.setChecked(False)
+    assert window.slope_selection.findData(-1) >= 0
+    assert window.slope_selection.isEnabled()
+    window.slope_selection.setCurrentIndex(window.slope_selection.findData(1))
+
+    monkeypatch.setattr("app.ui.main_window.QColorDialog.getColor", lambda *_args, **_kwargs: QColor("#ff0000"))
+    window._choose_slope_color()
+    assert window.td_canvas.measurement_style(1)[:2] == ("#ff0000", "#ff0000")
+    second_before = window.td_canvas.measurement_style(2)
+
+    monkeypatch.setattr("app.ui.main_window.QColorDialog.getColor", lambda *_args, **_kwargs: QColor("#00ff00"))
+    window._choose_slope_text_color()
+    assert window.td_canvas.measurement_style(1)[:2] == ("#ff0000", "#00ff00")
+    assert window.td_canvas.measurement_style(2) == second_before
+
+    window.slope_background_transparent.setChecked(True)
+    assert window.td_canvas.measurement_style(1)[2] == "transparent"
+    assert window.td_canvas.measurement_style(2)[2] != "transparent"
+
+    window.slope_selection.setCurrentIndex(window.slope_selection.findData(-1))
+    monkeypatch.setattr("app.ui.main_window.QColorDialog.getColor", lambda *_args, **_kwargs: QColor("#123456"))
+    window._choose_slope_background()
+    assert all(window.td_canvas.measurement_style(i)[2] == "#123456" for i in (1, 2))
+    assert window.slope_velocity_unit.currentData() == "km"
+
+    window.slope_auto_colors.setChecked(True)
+    assert not window.slope_selection.isEnabled()
+    window.close(); app.processEvents()
 
 
 def test_filtered_figure_export_restores_live_artists(tmp_path: Path) -> None:

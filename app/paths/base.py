@@ -10,7 +10,7 @@ import numpy as np
 from astropy.wcs import WCS
 
 
-@dataclass
+@dataclass(eq=False)
 class PathGeometry:
     """A selected centre path and all scientific sampling settings.
 

@@ -246,6 +246,7 @@ class PathPanel(QWidget):
         self.width.setMaximumWidth(110)
         self.width_unit = QComboBox()
         self.width_unit.addItems(["pixel", "arcsec", "km", "Mm"])
+        self.width_unit.setCurrentText("arcsec")
         self.width_unit.setMaximumWidth(88)
         self.show_width = QCheckBox("Show slit width")
         self.show_width.setChecked(True)

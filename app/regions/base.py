@@ -11,7 +11,7 @@ from astropy.wcs import WCS
 from matplotlib.path import Path as MplPath
 
 
-@dataclass
+@dataclass(eq=False)
 class RegionGeometry:
     """A closed scientific region, separate from slit/path geometry."""
 
