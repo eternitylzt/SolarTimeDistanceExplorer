@@ -3,7 +3,9 @@ numpy>=1.26,<3
 scipy>=1.11,<2
 astropy>=6,<9
 matplotlib>=3.8,<4
-PySide6>=6.6,<7
+# Qt Widgets application: Essentials contains QtCore/Gui/Widgets/Network/SVG;
+# the much larger Addons wheel is not used.
+PySide6-Essentials>=6.6,<7
 imageio-ffmpeg>=0.5,<1
 Pillow>=10,<12
 sunpy>=6,<9
@@ -11,5 +13,3 @@ aiapy>=0.12,<0.13
 # Required by SunPy Map support (not the unrelated network/timeseries extras).
 reproject>=0.14,<1
 mpl-animators>=1.2,<2
-pytest>=8,<10
-pyinstaller>=6.5,<7

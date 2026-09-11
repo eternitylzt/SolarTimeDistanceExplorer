@@ -13,7 +13,7 @@ if [[ ! -x ".venv/bin/python" ]]; then
     "$python_command" -m venv .venv
 fi
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements-dev.txt
 if [[ "${SKIP_TESTS:-0}" != "1" ]]; then
     QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest
 fi
@@ -41,7 +41,6 @@ if [[ "$system" == "Darwin" ]]; then
     archive="release/SolarTimeDistanceExplorer-${version}-macOS-${architecture}.zip"
     rm -f -- "$archive"
     ditto -c -k --sequesterRsrc --keepParent "dist/SolarTimeDistanceExplorer.app" "$archive"
-    shasum -a 256 "$archive" > "${archive%.zip}.sha256.txt"
 else
     if [[ ! -x "dist/SolarTimeDistanceExplorer/SolarTimeDistanceExplorer" ]]; then
         echo "Expected Linux executable was not produced." >&2
@@ -56,6 +55,5 @@ else
     archive="release/SolarTimeDistanceExplorer-${version}-Linux-${architecture}.tar.gz"
     rm -f -- "$archive"
     tar -C dist -czf "$archive" SolarTimeDistanceExplorer
-    sha256sum "$archive" > "${archive%.tar.gz}.sha256.txt"
 fi
 echo "Native package created: $archive"

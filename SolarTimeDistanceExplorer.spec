@@ -3,7 +3,7 @@
 
 import sys
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 
 datas = []
@@ -22,15 +22,13 @@ hiddenimports = [
     "aiapy.calibrate",
 ]
 datas += [("resources/stde_icon.png", "resources")]
-for package in ("matplotlib", "astropy", "sunpy", "aiapy", "certifi", "imageio_ffmpeg"):
-    datas += collect_data_files(package)
+# Matplotlib/Astropy/SunPy/certifi data are handled by their hooks.  Only the
+# active-platform FFmpeg executable is explicitly retained here.
+datas += collect_data_files("imageio_ffmpeg", includes=["binaries/*"])
+datas += collect_data_files("aiapy", includes=["CITATION.rst"])
+datas += collect_data_files("drms", includes=["CITATION.rst"])
 for distribution in ("imageio-ffmpeg",):
     datas += copy_metadata(distribution)
-# PyInstaller's PySide6 hook deliberately owns Qt DLL/plugin collection. Adding
-# those binaries a second time can create conflicting load paths in an onedir
-# build. imageio-ffmpeg remains explicit for MP4 export.
-for package in ("imageio_ffmpeg",):
-    binaries += collect_dynamic_libs(package)
 # Map source plug-ins are dynamically selected by the SunPy factory. Exclude
 # bundled test modules: they add third-party test-only dependencies to an EXE.
 hiddenimports += collect_submodules("sunpy.map", filter=lambda name: ".tests" not in name)
@@ -41,10 +39,13 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
+    hookspath=["packaging_hooks"],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter"],
+    excludes=[
+        "tkinter", "pytest", "IPython", "jupyter", "notebook",
+        "dask.dataframe",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

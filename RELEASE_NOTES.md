@@ -1,9 +1,11 @@
-# Solar Time–Distance Explorer 0.10.0
+# Solar Time–Distance Explorer 1.0.0
 
-- Region histogram sequences retain their numerical frame results in memory and now use fast step-patch rendering plus slider-event debouncing.
-- Zooming or panning any histogram frame establishes one viewport shared by all cached frames.
-- Histogram MP4/GIF export now runs in the background and includes current/full viewport, resolution, frame range/step, FPS, codec, bitrate, axes, timestamp, title, legend, and grid controls.
-- Added a complete Chinese/English application-language switch under Settings, with saved preference and optional automatic restart.
-- Added regressions for cached result identity, cross-frame zoom preservation, large-bin artist count, configurable playable MP4 export, and full English static UI coverage.
+The first stable research release.
 
-Windows remains the primary tested platform. Linux and macOS packages are native, unsigned research-preview builds produced by GitHub-hosted runners.
+- Fixed Region histogram sequences retaining grid lines after **Grid** was disabled, including cached-frame redraws.
+- Replaced long message boxes with scrollable, selectable help pages. About now provides a copyable email address and clickable project homepage.
+- Reduced distribution size with focused Astropy/SunPy hooks, test/data exclusions, and Qt Essentials instead of unused Qt Addons.
+- Separated runtime and development dependencies and strengthened frozen scientific-runtime validation for FITS, WCS, SunPy Map, SciPy sampling, AIA registration imports, PDF/EPS, MP4, and GIF.
+- Release pages now contain only the four native application archives; GitHub's asset digest remains available without separate SHA-256 text files.
+
+Windows x64 is the primary tested platform. Linux and macOS builds are native, unsigned packages produced by GitHub-hosted runners.

@@ -9,16 +9,18 @@ export.
 **Author:** Zhentong Li · eternitylzt@gmail.com ·
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Current version: **0.10.0** — functional research preview.
+> Current version: **1.0.0** — stable research release.
 
 ## 中文说明
 
 ### 下载与运行
 
 在 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases)
-Windows 用户下载 `SolarTimeDistanceExplorer-0.10.0-Windows-x64.zip`。完整解压后运行
+Windows 用户下载 `SolarTimeDistanceExplorer-1.0.0-Windows-x64.zip`。完整解压后运行
 `SolarTimeDistanceExplorer.exe`，无需另装 Python。请保留 EXE 与 `_internal`
-目录的相对位置。
+目录的相对位置。EXE 约数十 MB，但它不是独立的 onefile 程序；`_internal` 中的
+Python、Qt、NumPy/SciPy、SunPy/Astropy 与 FFmpeg 是离线运行 FITS/WCS、GUI 和视频
+导出所必需的运行环境，不能只复制 EXE。
 
 ### 主要功能
 
@@ -34,6 +36,7 @@ Windows 用户下载 `SolarTimeDistanceExplorer-0.10.0-Windows-x64.zip`。完整
 - 帧范围直方图结果一次计算后保存在内存中；阶梯填充渲染和滑块防抖使播放/拖动更流畅，任一帧的缩放/平移范围会用于整个序列。
 - 直方图动画在后台导出，可设置当前/完整范围、分辨率、起止帧、步长、FPS、编码器、码率、坐标轴、时间、标题、图例和网格。
 - **设置 → 语言 / Language** 可在中文与完整英文界面之间切换；选择后可自动重启并应用。
+- Help 内容使用可滚动、可选择复制的阅读窗口；About 中可复制邮箱并点击项目主页。
 - 速度测量默认输出 km/s；支持 `v₁、v₂…`、All/逐项样式、可拖动文字及独立 Text Background。
 - GIF/MP4、PNG/PDF/EPS/SVG/TIFF、TD/Region FITS/NPZ/CSV/TXT 和 `.stdproj` 项目文件。
 - 绘图历史保存轻量结果快照，可恢复被后续绘图覆盖的趋势、直方图或直方图序列。
@@ -66,7 +69,7 @@ Windows 用户下载 `SolarTimeDistanceExplorer-0.10.0-Windows-x64.zip`。完整
 ./.venv/Scripts/python.exe main.py
 ```
 
-测试并生成 Windows onedir、ZIP 与 SHA-256：
+测试并生成 Windows onedir 与 ZIP：
 
 ```powershell
 ./build.ps1
@@ -83,6 +86,8 @@ Windows 用户下载 `SolarTimeDistanceExplorer-0.10.0-Windows-x64.zip`。完整
 Linux/macOS 包由 `.github/workflows/multiplatform-release.yml` 在对应系统构建，
 不是 Windows 交叉编译。当前 macOS 包未做 Apple 开发者签名/公证，首次运行可能需要
 在“隐私与安全性”中确认；它们属于研究预览版。Unix 开发者可运行 `bash build_unix.sh`。
+Release 仅发布各平台程序压缩包，不再附带零散的 `.sha256.txt`；GitHub 会在每个
+Release asset 上提供 digest 信息。
 
 ### 快捷键
 
@@ -111,10 +116,13 @@ Linux/macOS 包由 `.github/workflows/multiplatform-release.yml` 在对应系统
 
 ### Download
 
-Download `SolarTimeDistanceExplorer-0.10.0-Windows-x64.zip` from
+Download `SolarTimeDistanceExplorer-1.0.0-Windows-x64.zip` from
 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases),
 extract the complete folder, and run `SolarTimeDistanceExplorer.exe`. Python is
 not required. Keep the EXE beside its `_internal` directory.
+The EXE is only the launcher/application archive in PyInstaller onedir mode.
+The `_internal` directory contains the bundled Python, Qt, scientific stack,
+and FFmpeg needed for offline FITS/WCS analysis and movie export, so it is required.
 
 ### Highlights
 
@@ -135,6 +143,8 @@ not required. Keep the EXE beside its `_internal` directory.
   and grid controls.
 - **Settings → Language** switches between a fully Chinese or fully English UI;
   the application can restart automatically to apply the choice cleanly.
+- Help pages are scrollable and selectable; About exposes a copyable email link
+  and clickable project homepage.
 - Velocity measurements default to km/s. Markers `v₁, v₂…` support automatic
   colours or All/per-marker line, text, text size, and text-background styling.
 - Publication figures, GIF/MP4, numerical TD/Region exports, and JSON project files.
@@ -166,12 +176,15 @@ See [docs/UserGuide.md](docs/UserGuide.md) for detailed operation and
 ./build.ps1
 ```
 
-`build.ps1` runs the test suite and creates the complete onedir package, release
-ZIP, and SHA-256 checksum.
+`build.ps1` runs the test suite and creates the complete optimized onedir package
+and release ZIP. Runtime dependencies are in `requirements.txt`; test/build tools
+are separated into `requirements-dev.txt`.
 
 On Linux or macOS, use `bash build_unix.sh`. Tagged releases are built natively
 on Windows x64, Linux x64, macOS Apple Silicon and macOS Intel by GitHub Actions.
 Windows remains the primary verified platform; unsigned Unix packages are research previews.
+Release pages contain only the native archives. GitHub displays an asset digest,
+so separate checksum text files are no longer published.
 
 ### Scientific notes
 

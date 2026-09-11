@@ -158,6 +158,37 @@ def test_histogram_sequence_cache_and_zoom_are_shared_across_frames(tmp_path) ->
     window.close(); app.processEvents()
 
 
+def test_histogram_sequence_grid_can_be_disabled_across_cached_frames(tmp_path) -> None:
+    """Turning Grid off must also hide minor grid artists on reused axes."""
+    app = QApplication.instance() or QApplication([])
+    dataset = _known_folder(tmp_path)
+    region = RegionGeometry.circle("R1", (10, 10), 3)
+    sequence = region_histogram_sequence(dataset, [region], 0, 2, 1, 0.5)
+    window = MainWindow(); window._install_dataset(dataset)
+    window.regions.append(region)
+    window.region_panel.regions.addItem(window._marker_item(region.name, True, region.id))
+    window._install_region_histogram_sequence(sequence, 0, record=False)
+
+    window.region_grid.setChecked(False)
+    window.show_region_histogram_frame(1)
+    app.processEvents()
+    ticks = (
+        *window.region_canvas.axes.xaxis.get_major_ticks(),
+        *window.region_canvas.axes.xaxis.get_minor_ticks(),
+        *window.region_canvas.axes.yaxis.get_major_ticks(),
+        *window.region_canvas.axes.yaxis.get_minor_ticks(),
+    )
+    assert ticks
+    assert not any(tick.gridline.get_visible() for tick in ticks)
+    window.show_region_histogram_frame(2)
+    assert not any(
+        tick.gridline.get_visible()
+        for axis in (window.region_canvas.axes.xaxis, window.region_canvas.axes.yaxis)
+        for tick in (*axis.get_major_ticks(), *axis.get_minor_ticks())
+    )
+    window.close(); app.processEvents()
+
+
 def test_large_histogram_uses_one_artist_per_region() -> None:
     app = QApplication.instance() or QApplication([])
     result = region_histograms(

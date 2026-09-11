@@ -4,18 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solar-time-distance-explorer"
-version = "0.10.0"
+version = "1.0.0"
 description = "Desktop FITS/SAV time-distance analysis for solar physics"
 authors = [{name = "Zhentong Li", email = "eternitylzt@gmail.com"}]
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
   "numpy>=1.26,<3", "scipy>=1.11,<2", "astropy>=6,<9",
-  "matplotlib>=3.8,<4", "PySide6>=6.6,<7",
+  "matplotlib>=3.8,<4", "PySide6-Essentials>=6.6,<7",
   "imageio-ffmpeg>=0.5,<1", "Pillow>=10,<12", "sunpy>=6,<9",
   "aiapy>=0.12,<0.13",
   "reproject>=0.14,<1", "mpl-animators>=1.2,<2",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pyinstaller>=6.5,<7"]
 
 [project.urls]
 Repository = "https://github.com/eternitylzt/SolarTimeDistanceExplorer"

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.i18n import LanguageEventFilter, set_language, translate_text
-from app.ui.dialogs import HistogramAnimationExportDialog
+from app.ui.dialogs import HelpTextDialog, HistogramAnimationExportDialog
 from app.ui.main_window import MainWindow
 
 
@@ -82,4 +82,18 @@ def test_histogram_movie_dialog_exposes_full_export_controls() -> None:
     assert settings["fps"] == 8.0
     assert settings["view_range"] == "current"
     assert settings["include_axes"] is False and settings["include_legend"] is False
+    dialog.close(); app.processEvents()
+
+
+def test_help_dialog_is_scrollable_copyable_and_supports_links() -> None:
+    app = QApplication.instance() or QApplication([])
+    dialog = HelpTextDialog(
+        "About", "<p>Email: <a href='mailto:test@example.com'>test@example.com</a></p>",
+        rich_text=True,
+    )
+    flags = dialog.browser.textInteractionFlags()
+    assert flags & dialog.browser.textInteractionFlags().TextSelectableByKeyboard
+    assert dialog.browser.openExternalLinks()
+    assert "test@example.com" in dialog.browser.toPlainText()
+    assert dialog.browser.verticalScrollBar() is not None
     dialog.close(); app.processEvents()

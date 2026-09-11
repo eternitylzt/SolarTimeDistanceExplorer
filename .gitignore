@@ -1,6 +1,7 @@
 .venv/
 build/
 dist/
+dist-*/
 release/
 __pycache__/
 .pytest_cache/
@@ -10,3 +11,5 @@ logs/
 *.log
 *-smoke.mp4
 *-smoke-frame.png
+lean-smoke-marker-*.txt
+frozen-smoke-*.txt

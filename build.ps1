@@ -27,7 +27,7 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 
 & $venvPython -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed with exit code $LASTEXITCODE" }
-& $venvPython -m pip install -r requirements.txt
+& $venvPython -m pip install -r requirements-dev.txt
 if ($LASTEXITCODE -ne 0) { throw "dependency installation failed with exit code $LASTEXITCODE" }
 if (-not $SkipTests) {
     & $venvPython -m pytest
@@ -81,8 +81,5 @@ if (Test-Path -LiteralPath $archive) {
     Remove-Item -LiteralPath $archive -Force
 }
 Compress-Archive -LiteralPath $appDirectory -DestinationPath $archive -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-$checksum = Join-Path $releaseDirectory "SolarTimeDistanceExplorer-$version-Windows-x64.sha256.txt"
-Set-Content -LiteralPath $checksum -Value "$hash  $(Split-Path -Leaf $archive)" -Encoding ascii
 Write-Host "Build and smoke test succeeded: $exe"
 Write-Host "Release archive: $archive"

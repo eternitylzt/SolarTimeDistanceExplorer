@@ -74,6 +74,7 @@ from app.processing.td_generator import TDConfig, TDResult
 from app.ui.dialogs import (
     AnimationExportDialog,
     HistogramAnimationExportDialog,
+    HelpTextDialog,
     ManualTimeDialog,
     PlotLayoutDialog,
     TimeAxisDialog,
@@ -1038,8 +1039,7 @@ class MainWindow(QMainWindow):
         self._redraw_td()
 
     def show_drawing_help(self) -> None:
-        QMessageBox.information(
-            self,
+        dialog = HelpTextDialog(
             tr("切片/区域绘制与科学参数说明", "Slit/Region Drawing and Scientific Parameters"),
             tr(
             "【缩放与绘制】先用图像上方放大镜拖框放大；再关闭放大镜，或直接点击“新建切片/绘制新区域”（程序会自动退出缩放模式）。\n\n"
@@ -1066,20 +1066,21 @@ class MainWindow(QMainWindow):
             "VELOCITY MEASUREMENT\nTwo clicks create v₁, v₂, … without endpoint circles. Labels are draggable. With Auto Colors disabled, select All or an individual marker before changing line, text, size, or background.\n\n"
             "HISTOGRAM SEQUENCES\nThe calculated histogram arrays are cached in memory. Scrubbing and playback reuse this cache, while one shared zoom/pan viewport is applied to every frame. Movie export can use either that viewport or the full range.\n\n"
             "CACHE, EXPORT, AND HISTORY\nOpening another source releases the preceding dataset cache. Settings can also clear it manually. Figure export options independently control axes, title, and colorbar. Plot History restores lightweight plot snapshots without copying image cubes."
-            ),
+            ), self,
         )
+        dialog.exec()
 
     def show_feature_overview(self) -> None:
-        QMessageBox.information(
-            self,
+        dialog = HelpTextDialog(
             tr("Solar Time–Distance Explorer — 主要功能", "Solar Time–Distance Explorer — Features"),
             tr(
             "本软件可打开单幅 FITS、FITS 文件夹、三维 FITS 和 SSW Map SAV；显示太阳 WCS 坐标；浏览及导出动画；绘制有限宽度直线/折线/平滑切片；使用真实观测时间生成时距图；测量传播速度；分析多个闭合区域的时间变化与直方图；并导出科研图像和数值数据。\n\n"
             "图像上方的上一帧/播放暂停/下一帧按钮用于快速浏览。图像工具栏提供复位、前进/后退、平移和矩形框选放大；动画可导出当前视口，并选择坐标、观测时间、Colorbar 与标记。设置菜单可调整内存缓存帧数；AIA 首次配准仍需要计算，之后优先使用内存或会话临时缓存。TD 与区域分析页可编辑英文标题、坐标标题、刻度字号、网格、线型/尺度，并直接导出 PDF/PNG/EPS/SVG/TIFF。区域直方图显示实际帧时间，并可选柱状图或线状图。主工具栏“保存当前视图”会根据右侧当前页自动保存 Map、TD 或区域图。所有科研图内文字保持英文。详细鼠标操作与参数说明见“帮助 → 切片/区域绘制与科学参数说明”。",
             "Open a FITS image, FITS folder, 3-D FITS cube, or SSW Map SAV; browse solar-WCS images and animations; draw finite-width line, polyline, and smooth-curve slits; generate true-observation-time time-distance diagrams; measure propagation velocity; and analyse multiple closed regions with trends and histogram sequences.\n\n"
             "The image toolbar supports home, history, pan, and rectangle zoom. Image and histogram movies can export the current viewport with configurable resolution, frame range, FPS, codec, bitrate, axes, timestamps, titles, legends, grids, colorbars, and overlays. AIA preparation is cached after first use. TD and Region pages provide publication controls and PDF/PNG/EPS/SVG/TIFF export. Scientific figure labels remain in English. See Help → Slit/Region Drawing and Scientific Parameters for mouse controls and definitions."
-            ),
+            ), self,
         )
+        dialog.exec()
 
     def _build_actions(self) -> None:
         self.open_image_action = QAction("打开单幅 FITS 图像…", self, triggered=self.open_fits_image)
@@ -3127,22 +3128,30 @@ class MainWindow(QMainWindow):
         import scipy
         import sunpy
 
-        QMessageBox.about(
-            self,
-            tr("关于 Solar Time–Distance Explorer", "About Solar Time–Distance Explorer"),
-            f"Solar Time–Distance Explorer {__version__}\n\n"
+        content = (
+            "<div style='font-size: 11pt; line-height: 1.45'>"
+            f"<h2>Solar Time–Distance Explorer {__version__}</h2>"
             + tr(
-            "FITS/SAV 时序、有限宽度曲线切片、真实观测时间时距图。\n\n"
-            "作者：Zhentong Li\n",
-            "FITS/SAV sequences, finite-width curved slits, and true-time time-distance diagrams.\n\n"
-            "Author: Zhentong Li\n",
+                "<p>FITS/SAV 时序、有限宽度曲线切片、真实观测时间时距图。</p>"
+                "<p><b>作者：</b>Zhentong Li</p>",
+                "<p>FITS/SAV sequences, finite-width curved slits, and true-time "
+                "time-distance diagrams.</p><p><b>Author:</b> Zhentong Li</p>",
             )
-            + "Email: eternitylzt@gmail.com\n"
-            "GitHub: https://github.com/eternitylzt\n\n"
-            + tr("Python 运行时；", "Python runtime; ")
-            + f"SunPy {sunpy.__version__}; aiapy {aiapy.__version__}; Astropy {astropy.__version__}; "
-            f"NumPy {numpy.__version__}; SciPy {scipy.__version__}; Matplotlib {matplotlib.__version__}.",
+            + "<p><b>Email:</b> <a href='mailto:eternitylzt@gmail.com'>"
+            "eternitylzt@gmail.com</a><br>"
+            "<b>GitHub:</b> <a href='https://github.com/eternitylzt/SolarTimeDistanceExplorer'>"
+            "SolarTimeDistanceExplorer project homepage</a></p>"
+            + f"<p>{tr('Python 运行时；', 'Python runtime; ')}"
+            f"SunPy {sunpy.__version__}; aiapy {aiapy.__version__}; Astropy {astropy.__version__}; "
+            f"NumPy {numpy.__version__}; SciPy {scipy.__version__}; "
+            f"Matplotlib {matplotlib.__version__}.</p></div>"
         )
+        dialog = HelpTextDialog(
+            tr("关于 Solar Time–Distance Explorer", "About Solar Time–Distance Explorer"),
+            content, self, rich_text=True,
+        )
+        dialog.resize(680, 450)
+        dialog.exec()
 
     def open_log_folder(self) -> None:
         """Open logged diagnostics in Windows Explorer."""

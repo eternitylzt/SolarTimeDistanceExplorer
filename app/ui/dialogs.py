@@ -16,10 +16,45 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSpinBox,
     QDoubleSpinBox,
+    QTextBrowser,
     QVBoxLayout,
 )
 
 from app.i18n import translate_text
+
+
+class HelpTextDialog(QDialog):
+    """Scrollable, searchable-by-browser, copyable help and About content."""
+
+    def __init__(
+        self,
+        title: str,
+        content: str,
+        parent: object | None = None,
+        *,
+        rich_text: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(780, 650)
+        layout = QVBoxLayout(self)
+        self.browser = QTextBrowser(self)
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByKeyboard
+        )
+        if rich_text:
+            self.browser.setHtml(content)
+        else:
+            self.browser.setPlainText(content)
+        layout.addWidget(self.browser)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.clicked.connect(self.accept)
+        layout.addWidget(buttons)
 
 
 class AnimationExportDialog(QDialog):

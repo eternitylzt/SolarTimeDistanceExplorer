@@ -1,3 +1,3 @@
 """Application version, kept separate for exports and About dialogs."""
 
-__version__ = "0.10.0"
+__version__ = "1.0.0"

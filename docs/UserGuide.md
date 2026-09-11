@@ -29,8 +29,9 @@
    Drag any marker after completion to correct it; Esc cancels. Switching to Regions
    and later choosing a new Slit safely reactivates the Slit editor. Left-click blank
    image space to deselect all handles while keeping checked overlays visible for export.
-   Use Help → Slit / Region Drawing Help for the same instructions without permanently
-   occupying the control panel.
+   Use Help → Slit / Region Drawing Help for the same instructions in a scrollable,
+   selectable window. Help text can be copied; About also provides clickable email
+   and project-homepage links.
 6. In Slit Parameters set Slit width = 5, Unit = arcsec (the WCS default), Integration = Mean,
    Interpolation = Linear. Enable Show slit width to preview the
    actual numerical strip as a live semi-transparent band; the solid centreline
@@ -187,6 +188,10 @@ also reselect that marker while its dataset remains open. The default maximum is
 * MP4 export fails: the release bundles `imageio-ffmpeg`; copy the whole onedir
   folder rather than only the EXE. MP4 is encoded as H.264/yuv420p with even
   dimensions and is decoded once before the app reports success.
+* Why is the ZIP much larger than the EXE? The program uses reliable PyInstaller
+  onedir packaging. `_internal` contains Python, Qt, NumPy/SciPy, SunPy/Astropy,
+  and FFmpeg and is required. Version 1.0 removes unused package tests/data and Qt
+  Addons, but the remaining scientific runtime cannot be deleted.
 * TD has NaN at an edge: the slit lies outside that frame. NaN is intended and
   is scientifically safer than clipping.
 * Sequence shifts: choose world-fixed tracking when WCS is valid. Do not assume

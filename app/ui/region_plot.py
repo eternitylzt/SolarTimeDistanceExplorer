@@ -11,6 +11,27 @@ from matplotlib.figure import Figure
 from app.processing.region_analysis import RegionHistogramResult, RegionTrendResult
 
 
+def _set_grid_visible(axes: object, visible: bool) -> None:
+    """Apply one grid state to existing and subsequently created tick artists.
+
+    Matplotlib's ``minorticks_on()`` can create fresh minor Tick objects after
+    ``Axes.grid(False)`` has run.  Reused histogram axes then retain visible
+    minor grid lines even though the GUI checkbox is clear.  Create the ticks
+    first, set the major/minor grid policy, and explicitly synchronize every
+    existing tick artist so cached sequence frames cannot inherit stale state.
+    """
+    axes.minorticks_on()  # type: ignore[attr-defined]
+    if visible:
+        axes.grid(True, which="both", alpha=0.25)  # type: ignore[attr-defined]
+    else:
+        # Supplying style properties together with ``visible=False`` makes
+        # Matplotlib enable the grid again; omit them on the disabled path.
+        axes.grid(False, which="both")  # type: ignore[attr-defined]
+    for axis in (axes.xaxis, axes.yaxis):  # type: ignore[attr-defined]
+        for tick in (*axis.get_major_ticks(), *axis.get_minor_ticks()):
+            tick.gridline.set_visible(visible)
+
+
 class RegionAnalysisCanvas(FigureCanvasQTAgg):
     """Render region trends/histograms while preserving marker colour identity."""
 
@@ -106,11 +127,7 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         self.axes.set_ylabel(y_label.strip() or f"Region {statistic}", fontsize=axis_label_size)
         self.axes.set_title(title.strip() or f"Region {statistic} vs Time", fontsize=title_size)
         self.axes.set_yscale(y_scale)
-        if grid:
-            self.axes.grid(True, which="both", alpha=0.25)
-        else:
-            self.axes.grid(False)
-        self.axes.minorticks_on()
+        _set_grid_visible(self.axes, grid)
         self.axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
         if entries:
             self.axes.legend(fontsize=legend_fontsize)
@@ -213,11 +230,7 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
             self.axes.set_xlim(*x_limits)
         if y_limits is not None:
             self.axes.set_ylim(*y_limits)
-        if grid:
-            self.axes.grid(True, which="both", alpha=0.25)
-        else:
-            self.axes.grid(False)
-        self.axes.minorticks_on()
+        _set_grid_visible(self.axes, grid)
         self.axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
         if entries and (rebuild or self._histogram_legend_fontsize != legend_fontsize):
             self.axes.legend(fontsize=legend_fontsize)

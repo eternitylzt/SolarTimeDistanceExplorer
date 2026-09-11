@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import os
+import logging
 from pathlib import Path
 
 _pre_qt_marker = os.environ.get("STDE_SMOKE_MARKER")
@@ -60,6 +61,44 @@ def _validate_export_backends() -> None:
             raise RuntimeError("One or more export smoke artifacts were not created.")
 
 
+def _validate_scientific_runtime() -> None:
+    """Exercise frozen FITS/WCS/SunPy and numerical imports used after startup."""
+    from tempfile import TemporaryDirectory
+
+    import numpy as np
+    from astropy.io import fits
+    from scipy.interpolate import splprep
+    from scipy.io import readsav  # noqa: F401
+    from scipy.ndimage import map_coordinates
+    import sunpy.map
+    from aiapy.calibrate import register  # noqa: F401
+
+    header = fits.Header({
+        "CTYPE1": "HPLN-TAN", "CTYPE2": "HPLT-TAN",
+        "CUNIT1": "arcsec", "CUNIT2": "arcsec",
+        "CRPIX1": 8.5, "CRPIX2": 8.5, "CRVAL1": 0.0, "CRVAL2": 0.0,
+        "CDELT1": 0.6, "CDELT2": 0.6, "DATE-OBS": "2026-01-01T00:00:00",
+        "DSUN_OBS": 149_597_870_700.0, "RSUN_REF": 695_700_000.0,
+        "HGLN_OBS": 0.0, "HGLT_OBS": 0.0, "INSTRUME": "AIA",
+        "TELESCOP": "SDO/AIA", "WAVELNTH": 171, "WAVEUNIT": "angstrom",
+        "LVL_NUM": 1.5,
+    })
+    data = np.arange(256, dtype=np.float32).reshape(16, 16)
+    solar_map = sunpy.map.Map((data, header))
+    if solar_map.data.shape != data.shape or not solar_map.wcs.has_celestial:
+        raise RuntimeError("Frozen SunPy Map/WCS validation failed.")
+    sampled = map_coordinates(data, np.array([[2.5], [3.5]]), order=1)
+    if sampled.shape != (1,):
+        raise RuntimeError("Frozen SciPy sampling validation failed.")
+    splprep([np.array([0.0, 1.0, 2.0]), np.array([0.0, 1.0, 0.0])], s=0, k=2)
+    with TemporaryDirectory(prefix="stde_fits_smoke_") as directory:
+        target = Path(directory) / "solar.fits"
+        fits.writeto(target, data, header, overwrite=True)
+        with fits.open(target, memmap=True) as hdul:
+            if hdul[0].data.shape != data.shape:
+                raise RuntimeError("Frozen FITS read/write validation failed.")
+
+
 def run() -> int:
     """Create and execute the Qt application with logging configured."""
     _smoke_marker("run entered")
@@ -110,6 +149,8 @@ def run() -> int:
             # validate; process pending events once, then exit deterministically.
             app.processEvents()
             if os.environ.get("STDE_SMOKE_EXPORTS") == "1":
+                _validate_scientific_runtime()
+                _smoke_marker("scientific runtime smoke succeeded")
                 _validate_export_backends()
                 _smoke_marker("export smoke succeeded")
             window.close()
@@ -119,5 +160,9 @@ def run() -> int:
         _smoke_marker("window shown")
         return app.exec()
     except Exception as exc:  # pragma: no cover - only catastrophic startup faults
+        logging.getLogger(__name__).exception("Application startup failed")
+        _smoke_marker(f"failed: {type(exc).__name__}: {exc}")
+        if "--smoke-test" in sys.argv or os.environ.get("STDE_SMOKE_TEST") == "1":
+            return 1
         QMessageBox.critical(None, "无法启动", f"程序无法启动。\n\n{exc}")
         raise
