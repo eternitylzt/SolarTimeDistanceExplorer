@@ -1,9 +1,9 @@
-# Solar Time–Distance Explorer 0.9.1
+# Solar Time–Distance Explorer 0.10.0
 
-- Velocity annotation font size now follows `Selected` (`Next`, `All`, or one `v_n`) just like annotation colour.
-- Region distributions can be calculated over an inclusive frame/time range, reviewed with a slider and Play/Pause controls, and exported as MP4 or GIF.
-- The currently visible/zoomed TD time range can populate the Region histogram range controls.
-- Plot History retains lightweight Region trend, histogram, and histogram-sequence results, so earlier plots can be restored after the shared canvas is reused.
-- Added native Windows x64, Linux x64, macOS Apple Silicon and macOS Intel build/release automation.
+- Region histogram sequences retain their numerical frame results in memory and now use fast step-patch rendering plus slider-event debouncing.
+- Zooming or panning any histogram frame establishes one viewport shared by all cached frames.
+- Histogram MP4/GIF export now runs in the background and includes current/full viewport, resolution, frame range/step, FPS, codec, bitrate, axes, timestamp, title, legend, and grid controls.
+- Added a complete Chinese/English application-language switch under Settings, with saved preference and optional automatic restart.
+- Added regressions for cached result identity, cross-frame zoom preservation, large-bin artist count, configurable playable MP4 export, and full English static UI coverage.
 
 Windows remains the primary tested platform. Linux and macOS packages are native, unsigned research-preview builds produced by GitHub-hosted runners.

@@ -132,15 +132,21 @@ contrast and never modify the exported TD matrix.
 11. To inspect changing distributions, set inclusive Start/End/Step frames and
     click the range-histogram button. Alternatively, zoom the TD plot and use
     **Use current TD time range**. The Region page then shows Previous/Play/Next,
-    a slider, exact frame time, and MP4/GIF export. Movie axes remain fixed to
-    avoid artificial changes caused by per-frame autoscaling.
+    a slider, exact frame time, and MP4/GIF export. Numerical histograms are
+    calculated once and retained in memory; playback never re-reads the FITS
+    cube. Dragging the slider is debounced and filled histograms use one fast
+    step-patch per Region. Zooming or panning any histogram frame saves one
+    shared x/y viewport and applies it to every other frame.
+12. Histogram movie export runs in the background. Its dialog parallels image
+    movie export: current/full viewport, output resolution, start/end/step, FPS,
+    MP4 codec/bitrate, axes, actual time, title, legend, and grid are selectable.
 
 ## Saving work
 
 The top toolbar's Save Current View button saves the plot visible on the right.
 Use its arrow to choose Map, Time–Distance, or Region Analysis explicitly. These
 exports call Matplotlib directly and are not screenshots. Figure labels and
-default titles are English even though workflow help remains Chinese.
+default titles remain English for publication.
 The export options can independently omit the colorbar, axes, or title and can
 use a transparent figure background; the visible interactive canvas is not
 modified by the export.
@@ -160,6 +166,10 @@ the source. If a source moved, point the dialog at its new location.
 Settings → Clear Current Data Cache releases decoded frames and temporary
 AIA-prepared FITS files while retaining the open dataset and currently displayed
 frame. Subsequent frame access is intentionally read/prepared again.
+
+Settings → Language switches the complete application interface between Chinese
+and English. The preference is saved with the application settings. Accept the
+restart prompt to relaunch automatically; declining applies it on the next start.
 
 View → Drawing History lists the most recent map loads, completed Slits and
 Regions, TD results, region trends, histograms, and histogram sequences. Region

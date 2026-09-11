@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.i18n import translate_text
+
 
 class AnimationExportDialog(QDialog):
     """Collect explicit movie geometry and encoder settings before choosing a file."""
@@ -102,35 +104,77 @@ class AnimationExportDialog(QDialog):
 
 
 class HistogramAnimationExportDialog(QDialog):
-    """Collect compact settings for a region-histogram movie or GIF."""
+    """Collect movie settings parallel to the image-sequence exporter."""
 
-    def __init__(self, default_fps: float, parent: object | None = None) -> None:
+    def __init__(
+        self,
+        default_fps: float,
+        n_frames: int,
+        viewport_size: tuple[int, int],
+        parent: object | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._viewport_size = viewport_size
         self.setWindowTitle("区域直方图动画导出设置")
         layout = QFormLayout(self)
-        self.resolution = QComboBox(); self.resolution.addItems(["1280 × 720", "1920 × 1080", "自定义"])
-        self.width = QSpinBox(); self.width.setRange(320, 7680); self.width.setValue(1280)
-        self.height = QSpinBox(); self.height.setRange(240, 4320); self.height.setValue(720)
+        self.view_range = QComboBox()
+        self.view_range.addItem("当前显示的坐标范围", "current")
+        self.view_range.addItem("完整直方图范围", "full")
+        self.resolution = QComboBox()
+        self.resolution.addItems(["当前窗口分辨率", "1920 × 1080", "1280 × 720", "自定义"])
+        self.width = QSpinBox(); self.width.setRange(320, 7680); self.width.setValue(viewport_size[0])
+        self.height = QSpinBox(); self.height.setRange(240, 4320); self.height.setValue(viewport_size[1])
         self.fps = QDoubleSpinBox(); self.fps.setRange(0.1, 60.0)
         self.fps.setValue(default_fps); self.fps.setSuffix(" fps")
+        self.start_frame = QSpinBox(); self.start_frame.setRange(1, max(1, n_frames)); self.start_frame.setValue(1)
+        self.end_frame = QSpinBox(); self.end_frame.setRange(1, max(1, n_frames)); self.end_frame.setValue(max(1, n_frames))
+        self.frame_step = QSpinBox(); self.frame_step.setRange(1, max(1, n_frames)); self.frame_step.setValue(1)
+        self.codec = QComboBox(); self.codec.addItems(["libx264", "mpeg4"])
+        self.bitrate = QLineEdit("8M")
+        self.include_axes = QCheckBox("显示坐标轴与刻度"); self.include_axes.setChecked(True)
+        self.include_timestamp = QCheckBox("显示实际观测时间"); self.include_timestamp.setChecked(True)
+        self.include_title = QCheckBox("显示图像标题"); self.include_title.setChecked(True)
+        self.include_legend = QCheckBox("显示 Legend"); self.include_legend.setChecked(True)
+        self.include_grid = QCheckBox("显示 Grid"); self.include_grid.setChecked(True)
         self.resolution.currentIndexChanged.connect(self._resolution_changed)
+        layout.addRow("图像范围", self.view_range)
         layout.addRow("分辨率", self.resolution)
         layout.addRow("宽度", self.width); layout.addRow("高度", self.height)
         layout.addRow("帧率", self.fps)
+        layout.addRow("序列起始帧", self.start_frame); layout.addRow("序列结束帧", self.end_frame)
+        layout.addRow("帧步长", self.frame_step)
+        layout.addRow("MP4 编码器", self.codec); layout.addRow("码率", self.bitrate)
+        layout.addRow(self.include_axes); layout.addRow(self.include_timestamp)
+        layout.addRow(self.include_title); layout.addRow(self.include_legend)
+        layout.addRow(self.include_grid)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
         self._resolution_changed(0)
 
     def _resolution_changed(self, index: int) -> None:
-        preset = {0: (1280, 720), 1: (1920, 1080)}.get(index)
-        custom = index == 2
+        preset = {0: self._viewport_size, 1: (1920, 1080), 2: (1280, 720)}.get(index)
+        custom = index == 3
         self.width.setEnabled(custom); self.height.setEnabled(custom)
         if preset:
             self.width.setValue(preset[0]); self.height.setValue(preset[1])
 
     def settings(self) -> dict[str, object]:
-        return {"size": (self.width.value(), self.height.value()), "fps": self.fps.value()}
+        return {
+            "output_size": (self.width.value(), self.height.value()),
+            "fps": self.fps.value(),
+            "view_range": self.view_range.currentData(),
+            "start": self.start_frame.value() - 1,
+            "end": self.end_frame.value() - 1,
+            "step": self.frame_step.value(),
+            "codec": self.codec.currentText(),
+            "bitrate": self.bitrate.text().strip(),
+            "include_axes": self.include_axes.isChecked(),
+            "include_timestamp": self.include_timestamp.isChecked(),
+            "include_title": self.include_title.isChecked(),
+            "include_legend": self.include_legend.isChecked(),
+            "grid": self.include_grid.isChecked(),
+        }
 
 
 class ViewExportDialog(QDialog):
@@ -269,8 +313,8 @@ def show_error(parent: object, title: str, message: str, detail: str | None = No
     """Show a courteous user message while tracebacks stay in the log."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Critical)
-    box.setWindowTitle(title)
-    box.setText(message)
+    box.setWindowTitle(translate_text(title))
+    box.setText(translate_text(message))
     if detail:
-        box.setDetailedText(detail)
+        box.setDetailedText(translate_text(detail))
     box.exec()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import matplotlib.dates as mdates
 import numpy as np
+from matplotlib.artist import Artist
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
@@ -20,10 +21,19 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
             layout_engine.set(w_pad=7.0 / 72.0, h_pad=5.0 / 72.0, wspace=0.04, hspace=0.04)
         super().__init__(self.figure)
         self.axes = self.figure.add_subplot(111)
+        self._histogram_signature: tuple[object, ...] | None = None
+        self._histogram_artists: dict[str, Artist] = {}
+        self._histogram_legend_fontsize: float | None = None
+
+    def _clear_histogram_artist_cache(self) -> None:
+        self._histogram_signature = None
+        self._histogram_artists.clear()
+        self._histogram_legend_fontsize = None
 
     def clear_plot(self, message: str = "No selected regions") -> None:
         """Clear stale analysis when no checked region remains."""
         self.figure.clear()
+        self._clear_histogram_artist_cache()
         self.axes = self.figure.add_subplot(111)
         self.axes.text(0.5, 0.5, message, ha="center", va="center", transform=self.axes.transAxes)
         self.axes.set_axis_off()
@@ -49,6 +59,7 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         plot_type: str = "line",
     ) -> None:
         self.figure.clear()
+        self._clear_histogram_artist_cache()
         self.axes = self.figure.add_subplot(111)
         is_time = result.times is not None
         if is_time:
@@ -127,32 +138,61 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         x_limits: tuple[float, float] | None = None,
         y_limits: tuple[float, float] | None = None,
     ) -> None:
-        self.figure.clear()
-        self.axes = self.figure.add_subplot(111)
         entries = list(zip(
-            result.region_names, result.edges, result.counts, result.region_colors, strict=True
+            result.region_ids, result.region_names, result.edges, result.counts,
+            result.region_colors, strict=True,
         ))
         # Draw the tallest distribution first. Small distributions are drawn
         # later/on top, which keeps their correct colours visible without an
         # expensive collision algorithm.
-        entries.sort(key=lambda item: float(np.max(item[2])) if len(item[2]) else 0.0, reverse=True)
-        for z_index, (name, edges, raw_counts, color) in enumerate(entries):
+        entries.sort(key=lambda item: float(np.max(item[3])) if len(item[3]) else 0.0, reverse=True)
+        signature = (
+            plot_type,
+            tuple(sorted(
+                (region_id, name, color)
+                for region_id, name, _edges, _counts, color in entries
+            )),
+            line_style,
+            float(line_width),
+            marker,
+        )
+        rebuild = signature != self._histogram_signature
+        if rebuild:
+            self.figure.clear()
+            self.axes = self.figure.add_subplot(111)
+            self._histogram_artists = {}
+            self._histogram_signature = signature
+            self._histogram_legend_fontsize = None
+        for z_index, (region_id, name, edges, raw_counts, color) in enumerate(entries):
             counts = np.asarray(raw_counts, dtype=float)
             if y_unit == "frequency":
                 total = float(np.sum(counts))
                 counts = counts / total if total > 0 else counts
             centers = (edges[:-1] + edges[1:]) / 2
             if plot_type == "bar":
-                self.axes.bar(
-                    centers, counts, width=edges[1:] - edges[:-1], align="center",
-                    linewidth=line_width, linestyle=line_style, label=name,
-                    color=color, edgecolor=color, alpha=0.46, zorder=3 + z_index,
-                )
+                # One StepPatch replaces potentially tens of thousands of
+                # Rectangle artists. This is visually a filled histogram but
+                # remains responsive while scrubbing a cached frame sequence.
+                if rebuild:
+                    artist = self.axes.stairs(
+                        counts, edges, fill=True, linewidth=line_width,
+                        linestyle=line_style, label=name, color=color,
+                        alpha=0.46, zorder=3 + z_index,
+                    )
+                    self._histogram_artists[region_id] = artist
+                else:
+                    artist = self._histogram_artists[region_id]
+                    artist.set_data(counts, edges)  # type: ignore[attr-defined]
+                    artist.set_zorder(3 + z_index)
             else:
-                self.axes.plot(
-                    centers, counts, drawstyle="steps-mid", linestyle=line_style,
-                    linewidth=line_width, marker=marker, label=name, color=color,
-                )
+                if rebuild:
+                    artist = self.axes.plot(
+                        centers, counts, drawstyle="steps-mid", linestyle=line_style,
+                        linewidth=line_width, marker=marker, label=name, color=color,
+                    )[0]
+                    self._histogram_artists[region_id] = artist
+                else:
+                    self._histogram_artists[region_id].set_data(centers, counts)  # type: ignore[attr-defined]
         self.axes.set_xlabel(x_label.strip() or "Pixel Value", fontsize=axis_label_size)
         default_y = "Relative Frequency" if y_unit == "frequency" else "Count"
         self.axes.set_ylabel(y_label.strip() or default_y, fontsize=axis_label_size)
@@ -166,6 +206,9 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         )
         self.axes.set_xscale(x_scale)
         self.axes.set_yscale(y_scale)
+        if x_limits is None or y_limits is None:
+            self.axes.relim()
+            self.axes.autoscale_view()
         if x_limits is not None:
             self.axes.set_xlim(*x_limits)
         if y_limits is not None:
@@ -176,6 +219,7 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
             self.axes.grid(False)
         self.axes.minorticks_on()
         self.axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
-        if entries:
+        if entries and (rebuild or self._histogram_legend_fontsize != legend_fontsize):
             self.axes.legend(fontsize=legend_fontsize)
+            self._histogram_legend_fontsize = legend_fontsize
         self.draw_idle()

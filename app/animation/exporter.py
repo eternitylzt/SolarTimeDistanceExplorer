@@ -371,7 +371,23 @@ def export_region_histogram_animation(
     tick_label_size: float = 9.0,
     legend_fontsize: float = 11.0,
     grid: bool = True,
+    x_scale: str = "linear",
+    y_scale: str = "linear",
+    viewport_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    start: int = 0,
+    end: int | None = None,
+    step: int = 1,
+    codec: str = "libx264",
+    bitrate: str = "8M",
+    include_axes: bool = True,
+    include_timestamp: bool = True,
+    include_title: bool = True,
+    include_legend: bool = True,
+    title: str = "",
+    x_label: str = "",
+    y_label: str = "",
     progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> None:
     """Render and encode a true-time region-histogram sequence as GIF/MP4.
 
@@ -387,15 +403,29 @@ def export_region_histogram_animation(
     if fps <= 0:
         raise ExportError("帧率必须大于 0。")
     width, height = max(320, int(output_size[0])), max(240, int(output_size[1]))
-    edge_arrays = [edges for result in sequence.results for edges in result.edges if len(edges)]
+    if suffix == ".mp4":
+        width += width % 2
+        height += height % 2
+    last = sequence.n_frames - 1 if end is None else min(int(end), sequence.n_frames - 1)
+    positions = list(range(max(0, int(start)), last + 1, max(1, int(step))))
+    if not positions:
+        raise ExportError("区域直方图动画帧范围为空。")
+    selected_results = [sequence.results[index] for index in positions]
+    edge_arrays = [edges for result in selected_results for edges in result.edges if len(edges)]
     if not edge_arrays:
         raise ExportError("区域直方图没有可绘制的数据。")
     x_limits = (
         min(float(np.nanmin(edges)) for edges in edge_arrays),
         max(float(np.nanmax(edges)) for edges in edge_arrays),
     )
+    if x_scale == "log" and x_limits[0] <= 0:
+        positive = [item[item > 0] for item in edge_arrays if np.any(item > 0)]
+        x_limits = (
+            min(float(np.nanmin(item)) for item in positive),
+            x_limits[1] if x_limits[1] > 0 else 1.0,
+        ) if positive else (0.1, 1.0)
     maximum = 0.0
-    for result in sequence.results:
+    for result in selected_results:
         for raw in result.counts:
             counts = np.asarray(raw, dtype=float)
             if y_unit == "frequency" and counts.sum() > 0:
@@ -403,16 +433,46 @@ def export_region_histogram_animation(
             if counts.size:
                 maximum = max(maximum, float(np.nanmax(counts)))
     y_limits = (0.0, maximum * 1.08 if maximum > 0 else 1.0)
+    if y_scale == "log":
+        y_limits = (max(maximum * 1e-6, np.finfo(float).tiny), y_limits[1])
+    full_limits = (x_limits, y_limits)
+    render_limits = viewport_limits or full_limits
     target.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = _ffmpeg_executable()
     staging = Path(tempfile.mkdtemp(prefix=".stde_region_hist_", dir=target.parent))
     encoded = staging / f"encoded{suffix}"
+    dpi = 100.0
+    figure = Figure(figsize=(width / dpi, height / dpi), dpi=dpi, layout="constrained")
+    canvas = FigureCanvasAgg(figure)
+    axes = figure.add_subplot(111)
+    command = [
+        str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s:v", f"{width}x{height}",
+        "-framerate", f"{fps:g}", "-i", "-",
+    ]
+    if suffix == ".mp4":
+        chosen_codec = codec if codec in {"libx264", "mpeg4"} else "libx264"
+        command.extend([
+            "-c:v", chosen_codec, "-pix_fmt", "yuv420p", "-b:v", bitrate or "8M",
+            "-movflags", "+faststart",
+        ])
+    else:
+        command.extend([
+            "-filter_complex", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+            "-loop", "0",
+        ])
+    command.append(str(encoded))
+    process: subprocess.Popen[bytes] | None = None
     try:
-        for position, result in enumerate(sequence.results):
-            dpi = 100.0
-            figure = Figure(figsize=(width / dpi, height / dpi), dpi=dpi, layout="constrained")
-            canvas = FigureCanvasAgg(figure)
-            axes = figure.add_subplot(111)
+        process = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert process.stdin is not None
+        for output_position, result in enumerate(selected_results):
+            if cancelled and cancelled():
+                raise InterruptedError("Region histogram animation export cancelled.")
+            axes.clear()
             entries = list(zip(result.region_names, result.edges, result.counts, result.region_colors, strict=True))
             entries.sort(key=lambda item: float(np.max(item[2])) if len(item[2]) else 0.0, reverse=True)
             for z_index, (name, edges, raw_counts, color) in enumerate(entries):
@@ -424,45 +484,59 @@ def export_region_histogram_animation(
                     axes.plot(centers, counts, drawstyle="steps-mid", color=color,
                               linewidth=line_width, linestyle=line_style, label=name)
                 else:
-                    axes.bar(centers, counts, width=edges[1:] - edges[:-1], align="center",
-                             color=color, edgecolor=color, alpha=0.46, linewidth=line_width,
-                             linestyle=line_style, label=name, zorder=3 + z_index)
+                    axes.stairs(counts, edges, fill=True, color=color, alpha=0.46,
+                                linewidth=line_width, linestyle=line_style,
+                                label=name, zorder=3 + z_index)
             observation = result.time.utc.isot if result.time is not None else f"Frame {result.frame_index + 1}"
-            axes.set_title(f"Region Distribution — {observation}; Bin Width = {result.bin_width:g}", fontsize=title_size)
-            axes.set_xlabel("Pixel Value", fontsize=axis_label_size)
-            axes.set_ylabel("Relative Frequency" if y_unit == "frequency" else "Count", fontsize=axis_label_size)
-            axes.set_xlim(*x_limits); axes.set_ylim(*y_limits)
+            if include_title:
+                axes.set_title(title.strip() or "Region Distribution", fontsize=title_size)
+            if include_timestamp:
+                axes.text(
+                    0.01, 0.99, observation, transform=axes.transAxes, ha="left", va="top",
+                    fontsize=tick_label_size, bbox={"facecolor": "white", "alpha": 0.72,
+                                                  "edgecolor": "none", "pad": 2},
+                )
+            axes.set_xlabel(x_label.strip() or "Pixel Value", fontsize=axis_label_size)
+            axes.set_ylabel(
+                y_label.strip() or ("Relative Frequency" if y_unit == "frequency" else "Count"),
+                fontsize=axis_label_size,
+            )
+            axes.set_xscale(x_scale); axes.set_yscale(y_scale)
+            axes.set_xlim(*render_limits[0]); axes.set_ylim(*render_limits[1])
             axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
             axes.minorticks_on()
             if grid:
                 axes.grid(True, which="both", alpha=0.25)
-            if entries:
+            if entries and include_legend:
                 axes.legend(fontsize=legend_fontsize)
+            if not include_axes:
+                axes.set_axis_off()
             canvas.draw()
             rgb = np.ascontiguousarray(np.asarray(canvas.buffer_rgba())[..., :3])
-            if suffix == ".mp4":
-                rgb = _pad_even(rgb)
-            Image.fromarray(rgb).save(staging / f"frame_{position:06d}.png", "PNG")
+            process.stdin.write(rgb.tobytes())
             if progress:
-                progress(position + 1, len(sequence.results) + 1)
-        command = [
-            str(ffmpeg), "-y", "-hide_banner", "-loglevel", "error",
-            "-framerate", f"{fps:g}", "-start_number", "0",
-            "-i", str(staging / "frame_%06d.png"),
-        ]
-        if suffix == ".mp4":
-            command.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart"])
-        else:
-            command.extend(["-filter_complex", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", "-loop", "0"])
-        command.append(str(encoded))
-        _run_ffmpeg(command)
+                progress(output_position + 1, len(selected_results) + 1)
+        process.stdin.close()
+        error = process.stderr.read() if process.stderr is not None else b""
+        returncode = process.wait()
+        process = None
+        if returncode != 0:
+            detail = error.decode("utf-8", errors="replace").strip()[-1800:]
+            raise ExportError(f"FFmpeg 编码失败：{detail or 'unknown encoder error'}")
         _verify_video(ffmpeg, encoded)
         os.replace(encoded, target)
         if progress:
-            progress(len(sequence.results) + 1, len(sequence.results) + 1)
+            progress(len(selected_results) + 1, len(selected_results) + 1)
+    except InterruptedError:
+        if process is not None:
+            process.terminate(); process.wait(timeout=5)
+            process = None
+        raise
     except ExportError:
         raise
     except Exception as exc:
         raise ExportError(f"区域直方图动画导出失败：{exc}") from exc
     finally:
+        if process is not None:
+            process.kill(); process.wait(timeout=5)
         shutil.rmtree(staging, ignore_errors=True)

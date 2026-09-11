@@ -6,6 +6,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.time import Time, TimeDelta
 from matplotlib.backend_bases import MouseButton
+from matplotlib.patches import StepPatch
 from PySide6.QtWidgets import QApplication
 
 from app.data.fits_folder import FitsFolderDataset
@@ -53,6 +54,8 @@ def test_circle_rectangle_polygon_masks_and_multi_region_trends(tmp_path) -> Non
     canvas = RegionAnalysisCanvas()
     canvas.show_histograms(histogram, plot_type="bar")
     assert canvas.axes.patches
+    assert all(isinstance(item, StepPatch) for item in canvas.axes.patches)
+    assert len(canvas.axes.patches) == len(regions)
     assert "2026-01-01" in canvas.axes.get_title()
     canvas.show_histograms(histogram, plot_type="line")
     assert len(canvas.axes.lines) == 3
@@ -122,5 +125,48 @@ def test_region_histogram_sequence_exports_playable_mp4(tmp_path) -> None:
     region = RegionGeometry.circle("R1", (10, 10), 3)
     sequence = region_histogram_sequence(dataset, [region], 0, 2, 2, 0.5)
     movie = tmp_path / "region_histograms.mp4"
-    export_region_histogram_animation(sequence, movie, 2.0, (320, 240))
+    export_region_histogram_animation(
+        sequence, movie, 2.0, (320, 240), start=1, end=1,
+        viewport_limits=((1.5, 2.5), (0.0, 40.0)), include_axes=False,
+        include_title=False, include_timestamp=False, include_legend=False,
+    )
     assert movie.is_file() and movie.stat().st_size > 1000
+
+
+def test_histogram_sequence_cache_and_zoom_are_shared_across_frames(tmp_path) -> None:
+    app = QApplication.instance() or QApplication([])
+    dataset = _known_folder(tmp_path)
+    region = RegionGeometry.circle("R1", (10, 10), 3)
+    sequence = region_histogram_sequence(dataset, [region], 0, 2, 1, 0.5)
+    window = MainWindow(); window._install_dataset(dataset)
+    window.regions.append(region)
+    window.region_panel.regions.addItem(window._marker_item(region.name, True, region.id))
+    window._install_region_histogram_sequence(sequence, 0, record=False)
+
+    # Sequence results are retained, rather than recalculated when scrubbing.
+    assert window._region_hist_sequence is sequence
+    first_result = sequence.results[0]
+    window.region_canvas.axes.set_xlim(1.7, 2.3)
+    window.region_canvas.axes.set_ylim(0.2, 25.0)
+    window.show_region_histogram_frame(1)
+    assert window._region_hist_sequence.results[0] is first_result
+    assert np.allclose(window.region_canvas.axes.get_xlim(), (1.7, 2.3))
+    assert np.allclose(window.region_canvas.axes.get_ylim(), (0.2, 25.0))
+    window.show_region_histogram_frame(2)
+    assert np.allclose(window.region_canvas.axes.get_xlim(), (1.7, 2.3))
+    assert np.allclose(window.region_canvas.axes.get_ylim(), (0.2, 25.0))
+    window.close(); app.processEvents()
+
+
+def test_large_histogram_uses_one_artist_per_region() -> None:
+    app = QApplication.instance() or QApplication([])
+    result = region_histograms(
+        np.linspace(0.0, 100.0, 40_000).reshape(200, 200),
+        [RegionGeometry.rectangle("R1", (100, 100), 198, 198)],
+        None, 0, 0.005,
+    )
+    canvas = RegionAnalysisCanvas(); canvas.show_histograms(result, plot_type="bar")
+    app.processEvents()
+    assert len(canvas.axes.patches) == 1
+    assert isinstance(canvas.axes.patches[0], StepPatch)
+    canvas.close()

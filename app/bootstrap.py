@@ -10,7 +10,7 @@ _pre_qt_marker = os.environ.get("STDE_SMOKE_MARKER")
 if _pre_qt_marker:
     Path(_pre_qt_marker).write_text("bootstrap entered before Qt import", encoding="utf-8")
 
-from PySide6.QtCore import QLibraryInfo, QTranslator
+from PySide6.QtCore import QCoreApplication, QLibraryInfo, QSettings, QTranslator, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -65,14 +65,27 @@ def run() -> int:
     _smoke_marker("run entered")
     configure_logging()
     _smoke_marker("logging configured")
+    settings = QSettings("SolarPhysics", "SolarTimeDistanceExplorer")
+    selected_language = os.environ.get("STDE_LANGUAGE", str(settings.value("language", "zh")))
+    from app.i18n import LanguageEventFilter, set_language
+
+    set_language(selected_language)
+    # Native Windows dialogs cannot be translated by the application. English
+    # mode therefore uses Qt's own dialogs so every visible control follows the
+    # selected language as well.
+    if selected_language.lower().startswith("en"):
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
     app = QApplication(sys.argv)
-    # The application has a single Chinese interface. Qt's translator also
-    # localizes native standard buttons such as OK/Cancel where available.
-    translator = QTranslator(app)
-    translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
-    if translator.load("qtbase_zh_CN", translations) or translator.load("qt_zh_CN", translations):
-        app.installTranslator(translator)
-        app._stde_translator = translator  # type: ignore[attr-defined]
+    if not selected_language.lower().startswith("en"):
+        # Qt's translator localizes standard buttons such as OK/Cancel.
+        translator = QTranslator(app)
+        translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        if translator.load("qtbase_zh_CN", translations) or translator.load("qt_zh_CN", translations):
+            app.installTranslator(translator)
+            app._stde_translator = translator  # type: ignore[attr-defined]
+    language_filter = LanguageEventFilter(app)
+    app.installEventFilter(language_filter)
+    app._stde_language_filter = language_filter  # type: ignore[attr-defined]
     _smoke_marker("QApplication created")
     app.setApplicationName("Solar Time–Distance Explorer")
     app.setOrganizationName("Solar Time-Distance Explorer")

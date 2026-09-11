@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import traceback
+from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QThread, Signal
 
@@ -14,6 +16,7 @@ from app.processing.region_analysis import (
     region_histogram_sequence,
 )
 from app.regions.base import RegionGeometry
+from app.animation.exporter import export_region_histogram_animation
 
 
 class RegionTrendWorker(QThread):
@@ -81,6 +84,45 @@ class RegionHistogramSequenceWorker(QThread):
                 cancelled=lambda: self._cancel,
             )
             self.completed.emit(result)
+        except InterruptedError:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc), traceback.format_exc())
+
+
+class RegionHistogramExportWorker(QThread):
+    """Render/encode a histogram movie outside the Qt GUI thread."""
+
+    progress = Signal(int, int)
+    completed = Signal(str)
+    failed = Signal(str, str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        sequence: RegionHistogramSequence,
+        destination: str | Path,
+        settings: dict[str, Any],
+    ) -> None:
+        super().__init__()
+        self.sequence = sequence
+        self.destination = str(destination)
+        self.settings = dict(settings)
+        self._cancel = False
+
+    def request_cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            export_region_histogram_animation(
+                self.sequence,
+                self.destination,
+                progress=lambda current, total: self.progress.emit(current, total),
+                cancelled=lambda: self._cancel,
+                **self.settings,
+            )
+            self.completed.emit(self.destination)
         except InterruptedError:
             self.cancelled.emit()
         except Exception as exc:
