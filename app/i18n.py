@@ -45,6 +45,8 @@ def tr(chinese: str, english: str) -> str:
 
 
 _PHRASES = {
+    "形式": "Form",
+    "纵轴": "Y axis",
     "Solar Time–Distance Explorer — 主要功能": "Solar Time–Distance Explorer — Features",
     "切片/区域绘制与科学参数说明": "Slit/Region Drawing and Scientific Parameters",
     "当前数据缓存已清除；已显示的帧仍保留，下一次访问其他帧时会重新读取/处理。":

@@ -116,7 +116,7 @@ class FitsFolderDataset(TimeSeriesDataset):
         self._validate_index(index)
         if self.prepare_aia:
             mapped = self.get_map(index)
-            if mapped is not None and index in self._aia_prepared_indices:
+            if mapped is not None:
                 return np.asarray(mapped.data)
         return self._raw_frame(index)
 
@@ -202,6 +202,22 @@ class FitsFolderDataset(TimeSeriesDataset):
         """Resize raw/prepared in-memory LRUs without discarding disk prep cache."""
         self._cache.resize(size)
         self._map_cache.resize(size)
+
+    def set_cache_budget(self, megabytes: int) -> None:
+        """Split a conservative payload budget between raw frames and Maps.
+
+        Shared raw/Map arrays may be counted twice; process memory also includes
+        active calculations, GUI artists and Python overhead outside this budget.
+        """
+        budget = max(1, int(megabytes)) * 1024**2 // 2
+        self._cache.set_byte_limit(budget)
+        self._map_cache.set_byte_limit(budget)
+
+    def cache_stats(self) -> dict[str, int]:
+        return {"bytes": self._cache.used_bytes + self._map_cache.used_bytes,
+                "budget": self._cache.max_bytes + self._map_cache.max_bytes,
+                "hits": self._cache.hits + self._map_cache.hits,
+                "misses": self._cache.misses + self._map_cache.misses}
 
     def clear_cache(self, *, include_disk: bool = True) -> None:
         """Release decoded/prepared frames and optionally reset the session prep store."""

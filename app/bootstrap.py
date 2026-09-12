@@ -98,6 +98,22 @@ def _validate_scientific_runtime() -> None:
             if hdul[0].data.shape != data.shape:
                 raise RuntimeError("Frozen FITS read/write validation failed.")
 
+    # Exercise the new serialization/fit paths inside the bundled interpreter.
+    from app.project.session import save_session, load_session
+    from app.processing.velocity import fit_velocity
+    from astropy.time import Time
+
+    fit = fit_velocity(np.array([0.,10.,25.]), np.array([1.,21.,51.]))
+    if abs(fit.slope-2)>1e-10:
+        raise RuntimeError("Frozen velocity fit validation failed.")
+    with TemporaryDirectory(prefix="stde_session_smoke_") as directory:
+        target = Path(directory)/"analysis.stdsession"
+        times = Time(["2026-01-01T00:00:00","2026-01-01T00:00:10"])
+        save_session(target,{"times":times,"values":data})
+        restored = load_session(target)
+        if not np.array_equal(restored["values"],data) or not np.all(restored["times"]==times):
+            raise RuntimeError("Frozen analysis session validation failed.")
+
 
 def run() -> int:
     """Create and execute the Qt application with logging configured."""

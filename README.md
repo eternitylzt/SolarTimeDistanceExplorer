@@ -9,7 +9,37 @@ export.
 **Author:** Zhentong Li · eternitylzt@gmail.com ·
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Current version: **1.1.0** — independent plot history and manual update checks.
+> Latest release: **1.2.3** — research reliability, editable frame markers,
+> automatic acceleration estimates, and complete analysis sessions.
+
+1.2 新增数据质量报告、标记撤销/重做、分析会话保存/恢复、缓存内存预算、
+多点/分段速度拟合、观测缺口与有效覆盖检查，以及统一导出参数记录。
+基础操作不变，没有新增第三方依赖。操作入口见 [研究工具说明](docs/ResearchTools.md)。
+
+1.2.1：质量报告后台检查与进度/取消；安全的绘图区形状设置；多点拟合保留选点、
+1σ 阴影与可选全程加速度；TD/区域图选帧跳转；更紧凑的区域面板。
+
+1.2.2：帧标记支持清除、样式设置、文字拖拽/双击编辑；多点拟合自动估算加速度，
+“显示加速度”只控制标注，具体数值始终保留在拟合详情中。
+
+1.2.3：Auto colors 移至 Selected 前；帧标记样式可编辑多行文字、删除 Frame 编号，
+并可恢复默认文字。重新选帧时使用新帧的默认文字，避免保留旧时间。
+
+Local 1.2 adds data quality reporting, marker undo/redo, portable analysis sessions,
+byte-budgeted caches, multipoint/segmented velocity fits, gap/coverage inspection,
+and shared export provenance. Existing workflows and dependencies are retained.
+See [Research Tools](docs/ResearchTools.md).
+
+1.2.1 adds cancellable background quality scans, unit-independent plot shapes,
+retained OLS picks and 1σ mean bands, optional global acceleration, plot-to-image
+frame navigation and a compact region panel. No additional dependencies.
+
+1.2.2 adds clearable/stylable frame markers with draggable labels and double-click
+editing. Multipoint fits automatically estimate acceleration; the checkbox only
+controls annotation visibility. Fit details retain the estimate and uncertainty.
+
+1.2.3 places Auto colors immediately before Selected. Frame style supports editable
+multiline label text and restoring defaults; picking another frame resets its text.
 
 ## 中文说明
 

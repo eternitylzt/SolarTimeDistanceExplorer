@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Callable, Any
 
 import numpy as np
 from astropy.time import Time
 
 from app.data.base import TimeSeriesDataset
 from app.regions.base import RegionGeometry
+from app.processing.provenance import result_provenance
+from app.utils.units import pixel_scale_arcsec
 
 
 @dataclass
@@ -21,6 +23,10 @@ class RegionTrendResult:
     values: np.ndarray  # [region, time]
     statistic: str
     region_colors: list[str]
+    valid_counts: np.ndarray | None = None
+    mask_counts: np.ndarray | None = None
+    valid_area_arcsec2: np.ndarray | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -33,6 +39,9 @@ class RegionHistogramResult:
     bin_width: float
     region_colors: list[str]
     time: Time | None = None
+    valid_counts: np.ndarray | None = None
+    mask_counts: np.ndarray | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -64,14 +73,23 @@ def analyze_region_trends(
     if not active:
         raise ValueError("Finish at least one closed region first.")
     output = np.full((len(active), dataset.n_frames), np.nan, dtype=float)
+    valid = np.zeros(output.shape, dtype=np.int64)
+    masks = np.zeros(output.shape, dtype=np.int64)
+    area = np.full(output.shape, np.nan)
     for frame_index in range(dataset.n_frames):
         if cancelled and cancelled():
             raise InterruptedError("Region analysis cancelled by user.")
         frame = np.asarray(dataset.get_frame(frame_index), dtype=float)
         wcs = dataset.get_wcs(frame_index)
+        scale = pixel_scale_arcsec(wcs)
         for region_index, region in enumerate(active):
-            values = frame[region.mask(frame.shape, wcs)]
+            mask = region.mask(frame.shape, wcs)
+            masks[region_index, frame_index] = np.count_nonzero(mask)
+            values = frame[mask]
             values = values[np.isfinite(values)]
+            valid[region_index, frame_index] = values.size
+            if scale is not None:
+                area[region_index, frame_index] = values.size * scale**2
             if values.size:
                 output[region_index, frame_index] = np.mean(values) if statistic == "mean" else np.sum(values)
         if progress:
@@ -84,6 +102,11 @@ def analyze_region_trends(
         values=output,
         statistic=statistic,
         region_colors=[item.display_color for item in active],
+        valid_counts=valid, mask_counts=masks, valid_area_arcsec2=area,
+        metadata=result_provenance(dataset, {"regions": [item.to_dict() for item in active],
+            "statistic": statistic, "exposure_normalization": False,
+            "validity": "finite pixel centres inside in-FOV mask; no missing-area correction",
+            "area": "approximate angular area from WCS geometric-mean scale squared"}),
     )
 
 
@@ -94,19 +117,24 @@ def region_histograms(
     frame_index: int,
     bin_width: float,
     time: Time | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> RegionHistogramResult:
     """Histogram finite pixel values in each region with an exact bin width."""
-    if bin_width <= 0:
+    if not np.isfinite(bin_width) or bin_width <= 0:
         raise ValueError("Histogram bin width must be positive.")
     names: list[str] = []
     ids: list[str] = []
     all_edges: list[np.ndarray] = []
     all_counts: list[np.ndarray] = []
+    valid_counts, mask_counts = [], []
     for region in regions:
         if not region.complete or not region.visible:
             continue
-        values = np.asarray(frame, dtype=float)[region.mask(frame.shape, wcs)]
+        mask = region.mask(frame.shape, wcs)
+        mask_counts.append(int(np.count_nonzero(mask)))
+        values = np.asarray(frame, dtype=float)[mask]
         values = values[np.isfinite(values)]
+        valid_counts.append(values.size)
         if not values.size:
             edges = np.array([0.0, bin_width])
             counts = np.array([0])
@@ -115,6 +143,8 @@ def region_histograms(
             stop = np.ceil(values.max() / bin_width) * bin_width
             if stop <= start:
                 stop = start + bin_width
+            if (stop-start)/bin_width > 200_000:
+                raise ValueError("Histogram needs over 200000 bins; increase Bin Width.")
             edges = np.arange(start, stop + bin_width * 1.000001, bin_width)
             counts, edges = np.histogram(values, bins=edges)
         names.append(region.name); ids.append(region.id); all_edges.append(edges); all_counts.append(counts)
@@ -123,6 +153,7 @@ def region_histograms(
         frame_index=frame_index, bin_width=bin_width,
         region_colors=[item.display_color for item in regions if item.complete and item.visible],
         time=time,
+        valid_counts=np.asarray(valid_counts), mask_counts=np.asarray(mask_counts), metadata=metadata or {},
     )
 
 
@@ -151,6 +182,7 @@ def region_histogram_sequence(
     stride = max(1, int(step))
     indices = np.arange(start, end + 1, stride, dtype=int)
     results: list[RegionHistogramResult] = []
+    resident_bytes = 0
     for position, frame_index in enumerate(indices, start=1):
         if cancelled and cancelled():
             raise InterruptedError("Region histogram sequence cancelled by user.")
@@ -164,8 +196,32 @@ def region_histogram_sequence(
                 time=dataset.get_time(int(frame_index)),
             )
         )
+        resident_bytes += sum(a.nbytes for a in (*results[-1].edges, *results[-1].counts))
+        if resident_bytes > 512 * 1024**2:
+            raise ValueError("Histogram cache exceeds 512 MiB; increase Bin Width or frame Step.")
         if progress:
             progress(position, len(indices))
     if not results or not results[0].region_names:
         raise ValueError("Select at least one completed closed region.")
+    # Align the already-computed counts. No second FITS read and no pixel-value
+    # copies are needed: all bins are anchored to integer multiples of width.
+    lower = min(float(e[0]) for result in results for e in result.edges)
+    upper = max(float(e[-1]) for result in results for e in result.edges)
+    n_bins = int(round((upper-lower)/bin_width))
+    if n_bins > 200_000 or n_bins * len(results) * len(results[0].counts) * 8 > 512 * 1024**2:
+        raise ValueError("Shared histogram bins exceed the 512 MiB budget; increase Bin Width or frame Step.")
+    shared_edges = lower + np.arange(n_bins+1) * bin_width
+    metadata = result_provenance(dataset, {"regions": [r.to_dict() for r in regions if r.complete and r.visible],
+        "bin_width": bin_width, "start_frame": start, "end_frame": end, "step": stride,
+        "bin_policy": "same edges for every region and frame", "exposure_normalization": False})
+    for result in results:
+        if cancelled and cancelled():
+            raise InterruptedError("Region histogram sequence cancelled by user.")
+        for i, (edges, counts) in enumerate(zip(result.edges, result.counts, strict=True)):
+            offset = int(round((edges[0]-lower)/bin_width))
+            aligned = np.zeros(n_bins, dtype=np.int64)
+            aligned[offset:offset+len(counts)] = counts
+            result.edges[i] = shared_edges
+            result.counts[i] = aligned
+        result.metadata = metadata
     return RegionHistogramSequence(results, indices, start, end, stride)

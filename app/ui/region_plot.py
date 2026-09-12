@@ -45,11 +45,13 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         self._histogram_signature: tuple[object, ...] | None = None
         self._histogram_artists: dict[str, Artist] = {}
         self._histogram_legend_fontsize: float | None = None
+        self._histogram_style_signature = None
 
     def _clear_histogram_artist_cache(self) -> None:
         self._histogram_signature = None
         self._histogram_artists.clear()
         self._histogram_legend_fontsize = None
+        self._histogram_style_signature = None
 
     def clear_plot(self, message: str = "No selected regions") -> None:
         """Clear stale analysis when no checked region remains."""
@@ -78,6 +80,7 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         title_size: float = 12.0,
         legend_fontsize: float = 12.0,
         plot_type: str = "line",
+        quantity: str = "signal",
     ) -> None:
         self.figure.clear()
         self._clear_histogram_artist_cache()
@@ -93,7 +96,14 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
         else:
             x = result.frame_indices
             default_x = "Frame Index"
-        entries = list(zip(result.region_names, result.values, result.region_colors, strict=True))
+        values = result.values
+        if quantity == "valid":
+            values = result.valid_counts
+        elif quantity == "area":
+            values = result.valid_area_arcsec2
+        if values is None:
+            values = np.full(result.values.shape, np.nan)
+        entries = list(zip(result.region_names, values, result.region_colors, strict=True))
         if plot_type == "bar":
             # Group bars rather than overplot them. Larger-amplitude series are
             # ordered first and smaller ones receive the higher z-order.
@@ -123,6 +133,10 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
                     linewidth=line_width, label=name, color=color,
                 )
         statistic = "Mean" if result.statistic == "mean" else "Sum"
+        if quantity == "valid":
+            statistic = "Valid Pixel Count"
+        elif quantity == "area":
+            statistic = "Valid Area [arcsec²]"
         self.axes.set_xlabel(x_label.strip() or default_x, fontsize=axis_label_size)
         self.axes.set_ylabel(y_label.strip() or f"Region {statistic}", fontsize=axis_label_size)
         self.axes.set_title(title.strip() or f"Region {statistic} vs Time", fontsize=title_size)
@@ -210,6 +224,17 @@ class RegionAnalysisCanvas(FigureCanvasQTAgg):
                     self._histogram_artists[region_id] = artist
                 else:
                     self._histogram_artists[region_id].set_data(centers, counts)  # type: ignore[attr-defined]
+        style_signature = (title, x_label, y_label, grid, x_scale, y_scale, axis_label_size,
+            tick_label_size, title_size, legend_fontsize, y_unit,
+            tuple(x_limits) if x_limits is not None else None, tuple(y_limits) if y_limits is not None else None)
+        observation = result.time.utc.isot if result.time is not None else f"Frame {result.frame_index+1}"
+        if not rebuild and self._histogram_style_signature == style_signature and x_limits is not None and y_limits is not None:
+            # Cached-sequence hot path: update only values, ordering and time.
+            # Keep tick locators, legend, grid and axes objects intact.
+            self.axes.set_title(title.strip() or f"Region Distribution — {observation}; Bin Width = {result.bin_width:g}", fontsize=title_size)
+            self.draw_idle()
+            return
+        self._histogram_style_signature = style_signature
         self.axes.set_xlabel(x_label.strip() or "Pixel Value", fontsize=axis_label_size)
         default_y = "Relative Frequency" if y_unit == "frequency" else "Count"
         self.axes.set_ylabel(y_label.strip() or default_y, fontsize=axis_label_size)

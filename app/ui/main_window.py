@@ -6,6 +6,8 @@ import logging
 import re
 import sys
 from io import BytesIO
+from time import perf_counter
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -84,6 +86,8 @@ from app.ui.dialogs import (
 )
 from app.ui.image_plot import ImageCanvas
 from app.ui.history_viewer import HistoryViewer
+from app.ui.research_tools import ResearchToolsMixin
+from app.processing.provenance import result_provenance, write_sidecar
 from app.ui.panels import DatasetPanel, ImagePanel, PathPanel, RegionPanel
 from app.ui.path_editor import PathEditor
 from app.ui.region_dialogs import ManualRegionDialog
@@ -105,7 +109,7 @@ SLIT_COLORS = ("#00e5ff", "#ff4d8d", "#8cff66", "#ffd23f", "#b388ff", "#ff8c42")
 REGION_COLORS = ("#ffcc33", "#00d4ff", "#ff5c8a", "#66e36f", "#b388ff", "#ff8c42")
 
 
-class MainWindow(QMainWindow):
+class MainWindow(ResearchToolsMixin, QMainWindow):
     """The application shell; all scientific operations live in non-UI modules."""
 
     def __init__(self) -> None:
@@ -157,6 +161,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menus()
         self._build_toolbar()
+        self._init_research_tools()
 
     def _build_ui(self) -> None:
         self.dataset_panel = DatasetPanel()
@@ -292,9 +297,18 @@ class MainWindow(QMainWindow):
         self.td_tick_size = QDoubleSpinBox(); self.td_tick_size.setRange(6, 30); self.td_tick_size.setValue(9); self.td_tick_size.setSuffix(" pt")
         self.td_axis_label_size.setMaximumWidth(90); self.td_tick_size.setMaximumWidth(90)
         self.td_include_start, _ = self._checkbox("横轴标题包含起始时间", False)
+        self.td_show_gaps, _ = self._checkbox("Show gaps", False)
+        self.td_gap_factor = QDoubleSpinBox(); self.td_gap_factor.setRange(1.1,100); self.td_gap_factor.setValue(5)
+        self.td_gap_factor.setSuffix(" × cadence"); self.td_gap_factor.setMaximumWidth(145)
+        self.td_gap_factor.setVisible(False)
+        self.td_show_gaps.toggled.connect(self.td_gap_factor.setVisible)
+        self.td_show_gaps.setToolTip(tr("长于阈值×中位间隔的缺口留白，不修改原数据。", "Leave long cadence gaps blank without altering data."))
+        self.td_show_gaps.toggled.connect(self._redraw_td)
+        self.td_gap_factor.valueChanged.connect(self._redraw_td)
         self.td_grid, _ = self._checkbox("Grid", False)
         self.td_colorbar, _ = self._checkbox("Colorbar", True)
-        self.td_aspect, _ = self._combo([("Auto", "auto"), ("Equal", "equal")])
+        self.td_aspect, _ = self._combo([(tr("自动", "Auto"), "auto"), (tr("正方形", "Square"), "equal"), (tr("宽屏", "Wide"), "wide")])
+        self.td_aspect.setToolTip(tr("绘图区外形，不是时间与距离的数据等比例；不改变数据或速度。", "Plot box shape, not equal time/distance units; does not change data or velocity."))
         self.slope_color = QPushButton("#ffffff")
         self.slope_text_color = QPushButton("#ffffff")
         self.slope_background = QPushButton("#000000")
@@ -321,7 +335,15 @@ class MainWindow(QMainWindow):
         td_export = QPushButton("导出时距图")
         td_data = QPushButton("导出时距数据")
         slope = QPushButton("测量速度")
-        clear_slope = QPushButton("清除斜率标记")
+        fit_details = QPushButton(tr("拟合详情", "Fit details")); fit_details.clicked.connect(self.show_fit_details)
+        self.velocity_fit_mode, _ = self._combo([("Two points", "two"), (tr("多点拟合", "OLS fit"), "ols"), ("Segmented", "segmented")])
+        self.show_acceleration, _ = self._checkbox(tr("显示加速度", "Show acceleration"), False)
+        self.show_acceleration.setVisible(False)
+        self.show_acceleration.toggled.connect(self.td_canvas.set_show_acceleration)
+        self.velocity_fit_mode.setToolTip(tr("OLS/分段：多次选点，右键或双击完成；Escape 取消。误差为拟合标准误。", "OLS/segmented: click points; right-click or double-click to finish, Escape to cancel. Error is fit standard error."))
+        self.velocity_fit_mode.currentIndexChanged.connect(lambda: setattr(self.td_canvas,"fit_mode",self._combo_value(self.velocity_fit_mode)))
+        self.velocity_fit_mode.currentIndexChanged.connect(lambda: self.show_acceleration.setVisible(self._combo_value(self.velocity_fit_mode)=="ols"))
+        clear_slope = QPushButton(tr("清除标记", "Clear markers"))
         td_export.clicked.connect(self.export_td_figure)
         td_data.clicked.connect(self.export_td_data)
         slope.clicked.connect(lambda: self.td_canvas.enable_slope_measurement(True))
@@ -364,6 +386,7 @@ class MainWindow(QMainWindow):
         td_time_controls.addWidget(self.td_time_format)
         td_time_controls.addWidget(self.td_custom_format)
         td_time_controls.addWidget(self.td_include_start)
+        td_time_controls.addWidget(self.td_show_gaps); td_time_controls.addWidget(self.td_gap_factor)
         td_time_controls.addStretch(1)
         td_layout.addLayout(td_time_controls)
         td_labels = QHBoxLayout()
@@ -375,16 +398,19 @@ class MainWindow(QMainWindow):
         td_style.addWidget(QLabel("坐标标题字号")); td_style.addWidget(self.td_axis_label_size)
         td_style.addWidget(QLabel("刻度字号")); td_style.addWidget(self.td_tick_size)
         td_style.addWidget(self.td_grid); td_style.addWidget(self.td_colorbar)
-        td_style.addWidget(QLabel("Aspect")); td_style.addWidget(self.td_aspect)
+        td_style.addWidget(QLabel(tr("绘图区形状", "Plot shape"))); td_style.addWidget(self.td_aspect)
         td_style.addStretch(1)
         td_layout.addLayout(td_style)
         slope_group = QGroupBox("Velocity Measurement")
         slope_group_layout = QVBoxLayout(slope_group)
         slope_actions = QHBoxLayout()
+        slope_actions.addWidget(self.velocity_fit_mode)
+        slope_actions.addWidget(self.show_acceleration)
         slope_actions.addWidget(self.slope_auto_colors)
         slope_actions.addWidget(QLabel("Selected")); slope_actions.addWidget(self.slope_selection)
         slope_actions.addStretch(1)
         slope_actions.addWidget(slope); slope_actions.addWidget(clear_slope)
+        slope_actions.addWidget(fit_details)
         slope_group_layout.addLayout(slope_actions)
         slope_style = QHBoxLayout()
         slope_style.addWidget(QLabel("Line")); slope_style.addWidget(self.slope_color)
@@ -429,6 +455,9 @@ class MainWindow(QMainWindow):
         self.region_marker, _ = self._combo([("Point", "."), ("Circle", "o"), ("Square", "s"), ("None", "None")])
         self.region_x_scale, _ = self._combo([("Linear", "linear"), ("Log", "log")])
         self.region_y_scale, _ = self._combo([("Linear", "linear"), ("Log", "log")])
+        self.region_quantity, _ = self._combo([("Signal", "signal"), ("Valid pixels", "valid"), ("Valid area [arcsec²]", "area")])
+        self.region_quantity.setToolTip(tr("仅用于时间变化图；检查覆盖变化，原始统计数据保留。", "Trend only: inspect changing coverage; original statistics are retained."))
+        self.region_quantity.currentIndexChanged.connect(self._redraw_region)
         self.region_grid, _ = self._checkbox("Grid", True)
         self.region_axis_label_size = QDoubleSpinBox(); self.region_axis_label_size.setRange(6, 36); self.region_axis_label_size.setValue(11); self.region_axis_label_size.setSuffix(" pt")
         self.region_tick_size = QDoubleSpinBox(); self.region_tick_size.setRange(6, 30); self.region_tick_size.setValue(9); self.region_tick_size.setSuffix(" pt")
@@ -449,6 +478,7 @@ class MainWindow(QMainWindow):
         for label, control in (("X scale", self.region_x_scale), ("Y scale", self.region_y_scale)):
             region_axes_style.addWidget(QLabel(label)); region_axes_style.addWidget(control)
         region_axes_style.addWidget(self.region_grid); region_axes_style.addStretch(1)
+        region_axes_style.addWidget(QLabel("Trend quantity")); region_axes_style.addWidget(self.region_quantity)
         region_layout.addLayout(region_axes_style)
         region_font_style = QHBoxLayout()
         for label, control in (
@@ -694,6 +724,8 @@ class MainWindow(QMainWindow):
         show_regions = self.keep_cross_tab_overlays or self.left_tabs.currentIndex() == 3
         self.image_canvas.set_paths(self.paths if show_slits else [], self.active_path_id)
         self.image_canvas.set_regions(self.regions if show_regions else [], self.active_region_id)
+        if hasattr(self, "edit_history"):
+            self.edit_history.changed()
 
     def _set_keep_overlays(self, checked: bool) -> None:
         self.keep_cross_tab_overlays = checked
@@ -806,6 +838,10 @@ class MainWindow(QMainWindow):
                 values=source.values[indices],
                 statistic=source.statistic,
                 region_colors=[source.region_colors[index] for index in indices],
+                valid_counts=source.valid_counts[indices] if source.valid_counts is not None else None,
+                mask_counts=source.mask_counts[indices] if source.mask_counts is not None else None,
+                valid_area_arcsec2=source.valid_area_arcsec2[indices] if source.valid_area_arcsec2 is not None else None,
+                metadata=source.metadata,
             )
         else:
             self.region_result = RegionHistogramResult(
@@ -817,6 +853,9 @@ class MainWindow(QMainWindow):
                 bin_width=source.bin_width,
                 region_colors=[source.region_colors[index] for index in indices],
                 time=source.time,
+                valid_counts=source.valid_counts[indices] if source.valid_counts is not None else None,
+                mask_counts=source.mask_counts[indices] if source.mask_counts is not None else None,
+                metadata=source.metadata,
             )
         self._redraw_region()
 
@@ -1069,6 +1108,9 @@ class MainWindow(QMainWindow):
             "VELOCITY MEASUREMENT\nTwo clicks create v₁, v₂, … without endpoint circles. Labels are draggable. With Auto Colors disabled, select All or an individual marker before changing line, text, size, or background.\n\n"
             "HISTOGRAM SEQUENCES\nThe calculated histogram arrays are cached in memory. Scrubbing and playback reuse this cache, while one shared zoom/pan viewport is applied to every frame. Movie export can use either that viewport or the full range.\n\n"
             "CACHE, EXPORT, AND HISTORY\nOpening another source releases the preceding dataset cache. Settings can also clear it manually. Figure export options independently control axes, title, and colorbar. Plot History opens independent result views without changing current drawing. Deleted or changed markers are view-only. Return to Latest State closes history; Use matching current markers explicitly selects surviving, unchanged geometry for analysis."
+            ) + "\n\n" + self.research_help_text() + tr(
+                "\n\n【拟合与比例】多点拟合至少3点，保留选点，阴影是速度直线拟合均值的1σ不确定度。另自动拟合二次曲线估算全程加速度，勾选“显示加速度”仅控制文字，不改变速度线；数值与二次拟合残差始终在拟合详情中。三点可估算加速度但不能估计误差；至少4点才有残差自由度。只用于整体持续加速/减速结构，先检查轨迹和残差，方向反转会警告。统计误差不含描迹/WCS/投影误差。绘图区形状只控制画框长宽，不影响数据。\n\n【选择帧】TD/区域页点击“在图上选帧”，点击时间，再“查看对应图像”。文字默认在虚线旁边，可拖动；双击文字或点击“帧标记样式”可改颜色、线宽、线型、字体、字号和背景。“清除帧标记”删除本页帧标记，不影响速度标记。直方图选定当前显示帧；可先用序列滑块切帧。",
+                "\n\nFITS AND PLOT SHAPE: OLS requires 3+ points; shading is 1-sigma uncertainty of the linear fitted mean. A separate quadratic automatically estimates global acceleration. Show acceleration controls only its label, not the velocity line. Values and quadratic residuals remain in Fit details. Three points determine acceleration without residual uncertainty; 4+ permit error estimation. Use only for overall speeding up/slowing down and inspect residuals. Direction reversal is flagged. Tracing/WCS/projection errors are excluded. Plot shape controls box dimensions only.\n\nPICK FRAME: pick a time, then Show frame image. The label starts beside the dashed line and can be dragged. Double-click it or use Frame style to edit colors, width, line style, font, size and background. Clear frame removes only the frame marker, not velocity measurements. Histogram clicks select the displayed frame; use the sequence slider first if needed."
             ), self,
         )
         dialog.exec()
@@ -1159,6 +1201,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.exit_action)
         view_menu = self.menuBar().addMenu("查看(&V)")
         view_menu.addAction(self.metadata_action)
+        view_menu.addAction(tr("当前数据路径…", "Current data location…"), self.show_data_location)
         self.history_menu = view_menu.addMenu("绘图历史")
         self._rebuild_history_menu()
         animation_menu = self.menuBar().addMenu("动画(&A)")
@@ -1224,8 +1267,24 @@ class MainWindow(QMainWindow):
                 if code == "en" else "请手动重新启动程序；语言设置已经保存。",
             )
 
+    def show_data_location(self) -> None:
+        if self.dataset is None:
+            return
+        from html import escape
+        source = self.dataset.source.resolve()
+        folder = source if source.is_dir() else source.parent
+        HelpTextDialog(tr("当前数据路径", "Current data location"),
+            f"<p>{escape(str(source))}</p><p><a href='{folder.as_uri()}'>{tr('打开文件夹', 'Open folder')}</a></p>",
+            self, rich_text=True).exec()
+
     def closeEvent(self, event: Any) -> None:  # noqa: N802
         """Cancel background work before Qt destroys its worker objects."""
+        quality = getattr(self, "_quality_worker", None)
+        if quality is not None and quality.isRunning():
+            quality.requestInterruption()
+            event.ignore()
+            quality.finished.connect(self.close)
+            return
         workers = (self._region_export_worker, self._region_worker, self._td_worker)
         for worker in workers:
             if worker is not None and worker.isRunning():
@@ -1606,6 +1665,7 @@ class MainWindow(QMainWindow):
 
     def _install_dataset(self, dataset: TimeSeriesDataset) -> None:
         """Replace only source-specific state; paths/results do not leak across datasets."""
+        self._timer.stop()
         previous = self.dataset
         previous_cache_cleared = previous is not None and previous is not dataset
         if previous_cache_cleared:
@@ -1688,6 +1748,7 @@ class MainWindow(QMainWindow):
         self._record_history(
             f"Opened map data: {Path(str(dataset.source)).name}", main_tab=0, left_tab=0, frame=0
         )
+        self._research_dataset_installed()
 
     def set_current_frame(self, index: int) -> None:
         """Render current source frame; only this one image needs RAM for a folder."""
@@ -1698,9 +1759,13 @@ class MainWindow(QMainWindow):
         self.frame_slider.blockSignals(True)
         self.frame_slider.setValue(index)
         self.frame_slider.blockSignals(False)
+        started = perf_counter()
         frame = self.dataset.get_frame(index)
         solar_map = self.dataset.get_map(index)
         display_wcs = solar_map.wcs if solar_map is not None else self.dataset.get_wcs(index)
+        if hasattr(self, "_timings"):
+            self._record_timing("Frame/Map read or cache", perf_counter()-started)
+            self._draw_started = perf_counter()
         time = self.dataset.get_time(index)
         time_text = time.isot if time is not None else f"Frame {index + 1}"
         plot_kind = "Solar Map" if display_wcs is not None and display_wcs.has_celestial else "Image"
@@ -1724,6 +1789,8 @@ class MainWindow(QMainWindow):
         self._refresh_overlays()
         self.frame_label.setText(f"帧：{index + 1} / {self.dataset.n_frames}")
         self.time_label.setText(f"时间：{time_text}")
+        if hasattr(self, "cache_label"):
+            self._update_cache_status()
 
     def _move_frame(self, delta: int) -> None:
         if self.dataset is not None:
@@ -1773,6 +1840,7 @@ class MainWindow(QMainWindow):
 
     def new_path(self, selected_type: str | None = None) -> None:
         """Begin mouse selection of a new centreline with controls from Path panel."""
+        self.edit_history.flush()
         if self.dataset is None:
             self.statusBar().showMessage("请先加载数据，再选择切片。")
             return
@@ -1865,6 +1933,7 @@ class MainWindow(QMainWindow):
 
     def new_region(self, selected_type: str | None = None) -> None:
         """Begin interactive selection of a closed scientific region."""
+        self.edit_history.flush()
         if self.dataset is None:
             self.statusBar().showMessage("请先加载图像或序列，再绘制区域。")
             return
@@ -2031,6 +2100,7 @@ class MainWindow(QMainWindow):
             )
 
     def delete_active_region(self) -> None:
+        self.edit_history.flush()
         active = self.active_region()
         if active is None:
             row = self.region_panel.regions.currentRow()
@@ -2106,6 +2176,8 @@ class MainWindow(QMainWindow):
                 frame, self.regions, self.dataset.get_wcs(self.current_frame),
                 self.current_frame, self.region_panel.bin_width.value(),
                 time=self.dataset.get_time(self.current_frame),
+                metadata=result_provenance(self.dataset, {"regions": [r.to_dict() for r in self.regions if r.complete and r.visible],
+                    "frame_index": self.current_frame, "bin_width": self.region_panel.bin_width.value(), "exposure_normalization": False}),
             )
             if not result.region_names:
                 raise ValueError("请至少勾选一个已完成的闭合区域。")
@@ -2432,6 +2504,7 @@ class MainWindow(QMainWindow):
             return dict(
                 time_format=formats[self._combo_value(self.region_time_format)],
                 plot_type=self._combo_value(self.region_panel.trend_plot_type),
+                quantity=self._combo_value(self.region_quantity),
                 **common,
             )
         else:
@@ -2476,7 +2549,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            export_region_result(self.region_result, path)
+            export_region_result(replace(self.region_result, metadata={**self.region_result.metadata,
+                "display": self._region_plot_options(self.region_result,self._region_hist_sequence)}), path)
             self.statusBar().showMessage(f"区域数据已保存：{path}")
         except Exception as exc:
             show_error(self, "无法导出区域数据", str(exc))
@@ -2621,6 +2695,7 @@ class MainWindow(QMainWindow):
 
     def delete_active_path(self) -> None:
         """Remove the selected path only; no source data are ever deleted."""
+        self.edit_history.flush()
         active = self.active_path()
         if active is None:
             row = self.path_panel.paths.currentRow()
@@ -2736,6 +2811,7 @@ class MainWindow(QMainWindow):
         path_name = str(result.metadata.get("path", {}).get("name", ""))
         automatic_title = f"Time–Distance Diagram — {path_name}" if path_name else "Time–Distance Diagram"
         return dict(
+            show_gaps=self.td_show_gaps.isChecked(), gap_factor=self.td_gap_factor.value(),
             cmap=self.td_cmap.currentText(),
             normalization_mode=self._combo_value(self.td_norm),
             stretch=self._combo_value(self.td_stretch),
@@ -2790,6 +2866,7 @@ class MainWindow(QMainWindow):
             include_title=bool(options["include_title"]),
             include_colorbar=bool(options["include_colorbar"]),
         )
+        write_sidecar(path, self._figure_provenance(canvas, options))
 
     def save_current_frame(self) -> None:
         """Export the Map canvas at publication quality, never a GUI screenshot."""
@@ -2939,15 +3016,19 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
+            export_result = replace(self.td_result, metadata={**self.td_result.metadata,
+                "velocity_measurements": self.td_canvas.measurement_snapshot(),
+                "display": self._td_plot_options(self.td_result),
+                "velocity_style": self._td_settings()})
             suffix = Path(path).suffix.lower()
             if suffix == ".fits" or "FITS" in selected_filter:
-                export_td_fits(self.td_result, path)
+                export_td_fits(export_result, path)
             elif suffix == ".csv" or "CSV" in selected_filter:
-                export_td_csv(self.td_result, path)
+                export_td_csv(export_result, path)
             elif suffix == ".txt" or "文本" in selected_filter:
-                export_td_txt(self.td_result, path)
+                export_td_txt(export_result, path)
             else:
-                export_td_npz(self.td_result, path)
+                export_td_npz(export_result, path)
             self.statusBar().showMessage(f"时距数据已保存：{path}")
         except Exception as exc:
             LOG.exception("TD data export failed")
@@ -3019,6 +3100,7 @@ class MainWindow(QMainWindow):
                 self.path_panel.paths.setCurrentRow(found)
             self._apply_image_settings(payload.get("display_settings", {}))
             self._apply_td_settings(payload.get("td_display_settings", {}))
+            self.edit_history.reset()
             self.statusBar().showMessage(f"项目已恢复：{path}")
         except Exception as exc:
             LOG.exception("Project open failed")
@@ -3040,6 +3122,9 @@ class MainWindow(QMainWindow):
 
     def _td_settings(self) -> dict[str, Any]:
         return {
+            "show_gaps": self.td_show_gaps.isChecked(), "gap_factor": self.td_gap_factor.value(),
+            "velocity_fit_mode": self._combo_value(self.velocity_fit_mode),
+            "show_acceleration": self.show_acceleration.isChecked(),
             "cmap": self.td_cmap.currentText(),
             "normalization": self._combo_value(self.td_norm),
             "stretch": self._combo_value(self.td_stretch),
@@ -3088,6 +3173,7 @@ class MainWindow(QMainWindow):
                 "trend_plot_type": self._combo_value(self.region_panel.trend_plot_type),
                 "histogram_plot_type": self._combo_value(self.region_panel.histogram_plot_type),
                 "histogram_y_unit": self._combo_value(self.region_panel.histogram_y_unit),
+                "quantity": self._combo_value(self.region_quantity),
             },
         }
 
@@ -3106,6 +3192,11 @@ class MainWindow(QMainWindow):
         self._reset_image_norm()
 
     def _apply_td_settings(self, settings: dict[str, Any]) -> None:
+        self.td_show_gaps.setChecked(bool(settings.get("show_gaps",False)))
+        self.td_gap_factor.setValue(float(settings.get("gap_factor",5)))
+        mode = settings.get("velocity_fit_mode", "two")
+        self._set_combo_value(self.velocity_fit_mode, "ols" if mode == "acceleration" else mode)
+        self.show_acceleration.setChecked(bool(settings.get("show_acceleration", mode == "acceleration")))
         self.td_cmap.setCurrentText(settings.get("cmap", "viridis"))
         self._set_combo_value(self.td_norm, settings.get("normalization", "percentile"))
         self._set_combo_value(self.td_stretch, settings.get("stretch", "linear"))
@@ -3162,6 +3253,7 @@ class MainWindow(QMainWindow):
         self._set_combo_value(self.region_panel.trend_plot_type, region.get("trend_plot_type", "line"))
         self._set_combo_value(self.region_panel.histogram_plot_type, region.get("histogram_plot_type", "bar"))
         self._set_combo_value(self.region_panel.histogram_y_unit, region.get("histogram_y_unit", "count"))
+        self._set_combo_value(self.region_quantity, region.get("quantity", "signal"))
         self._td_range_mode_changed()
         self._apply_slope_style()
         self._redraw_region()

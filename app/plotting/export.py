@@ -99,7 +99,7 @@ def _export_td_delimited(result: TDResult, path: str | Path, delimiter: str) -> 
 
 def export_td_fits(result: TDResult, path: str | Path) -> None:
     """Export TD matrix plus TIME, DISTANCE, and JSON PATH/parameter HDUs."""
-    primary = fits.PrimaryHDU(np.asarray(result.matrix, dtype=np.float32))
+    primary = fits.PrimaryHDU(np.asarray(result.matrix, dtype=np.float64))
     primary.header["EXTNAME"] = "TIME_DISTANCE"
     primary.header["BUNIT"] = "arbitrary"
     primary.header["SOURCE"] = str(result.metadata.get("source", ""))[:68]

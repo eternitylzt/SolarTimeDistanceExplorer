@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import numpy as np
 
 import matplotlib.dates as mdates
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -14,6 +15,9 @@ from PySide6.QtCore import Signal, Qt
 from app.plotting.normalization import make_norm
 from app.processing.td_generator import TDResult
 from app.processing.time_edges import centers_to_edges
+from app.processing.time_edges import gap_aware_edges
+from app.processing.velocity import fit_velocity, fit_motion
+from matplotlib.collections import PolyCollection
 from app.utils.units import convert_distance_value
 
 
@@ -33,6 +37,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self.axes = self.figure.add_subplot(111)
         self.result: TDResult | None = None
         self._measure_mode = False
+        self.fit_mode = "two"
+        self.show_acceleration = False
         self._measure_points: list[tuple[float, float]] = []
         self._measurement_artists: list[Any] = []
         self._measurement_groups: list[dict[str, Any]] = []
@@ -55,6 +61,7 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         self.mpl_connect("button_press_event", self._on_press)
         self.mpl_connect("motion_notify_event", self._on_motion)
         self.mpl_connect("button_release_event", self._on_release)
+        self.mpl_connect("key_press_event", self._on_key)
 
     def show_result(
         self,
@@ -77,8 +84,11 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         vmax: float | None = None,
         low_percent: float = 1.0,
         high_percent: float = 99.0,
+        show_gaps: bool = False,
+        gap_factor: float = 5.0,
     ) -> None:
         """Render distance by time without making irregular cadence uniform."""
+        saved = self.measurement_snapshot() if self.result is result and self._true_time == bool(true_time and result.times is not None) else []
         self.result = result
         self._true_time = bool(true_time and result.times is not None)
         self._include_start_time = bool(include_start_time)
@@ -101,10 +111,13 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             low_percent=low_percent,
             high_percent=high_percent,
         )
+        rendered_matrix = result.matrix
+        if show_gaps and self._true_time:
+            time_edges, rendered_matrix = gap_aware_edges(time_centers, result.matrix, gap_factor)
         mesh = self.axes.pcolormesh(
             time_edges,
             distance_edges,
-            result.matrix,
+            rendered_matrix,
             cmap=cmap,
             norm=norm,
             shading="flat",
@@ -130,7 +143,10 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             self.axes.grid(True, alpha=0.25)
         else:
             self.axes.grid(False)
-        self.axes.set_aspect(aspect)
+        # Time is stored in days, distance in arcsec: equal DATA aspect has no
+        # physical meaning. These options constrain the physical plot box only.
+        self.axes.set_aspect("auto")
+        self.axes.set_box_aspect({"equal": 1.0, "wide": 0.6}.get(aspect))
         self.axes.tick_params(axis="both", which="both", labelsize=tick_label_size)
         self.axes.minorticks_on()
         self._measurement_artists.clear()
@@ -144,6 +160,8 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
         if self._true_time:
             self.axes.callbacks.connect("xlim_changed", self._time_xlim_changed)
             self._update_time_xlabel()
+        if saved:
+            self.restore_measurements(saved)
         self.draw_idle()
 
     def _time_xlim_changed(self, _axes: Any) -> None:
@@ -222,7 +240,9 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             if isinstance(artist, Text):
                 artist.set_color(text_color)
                 artist.set_fontsize(float(group.get("font_size", self.slope_fontsize)))
-                artist.set_text(self._velocity_text(group["delta_s"], group["delta_t"], group["index"]))
+                artist.set_text(self._velocity_text(group["delta_s"], group["delta_t"], group["index"], group.get("stderr")))
+                if group.get("acceleration") is not None and self.show_acceleration:
+                    artist.set_text(artist.get_text() + "\n" + self._acceleration_text(group))
                 patch = artist.get_bbox_patch()
                 if patch is not None:
                     transparent = background_color.lower() == "transparent"
@@ -232,7 +252,9 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             elif isinstance(artist, Line2D):
                 artist.set_color(color)
                 artist.set_linewidth(self.slope_linewidth)
-                artist.set_linestyle(self.slope_linestyle)
+                artist.set_linestyle("None" if artist.get_marker() == "o" else self.slope_linestyle)
+            elif isinstance(artist, PolyCollection):
+                artist.set_facecolor(color)
 
     @property
     def measurement_count(self) -> int:
@@ -354,24 +376,84 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
                     self.select_measurement(int(group["index"]))
                     return
             return
+        button = getattr(event, "button", 1)
+        if button == 3 or getattr(event, "dblclick", False):
+            self._finish_measurement()
+            return
+        if button != 1:
+            return
         self._measure_points.append((float(event.xdata), float(event.ydata)))
+        if self.fit_mode != "two":
+            for artist in self._pending_artists:
+                artist.remove()
+            points = np.asarray(self._measure_points)
+            self._pending_artists = self.axes.plot(points[:, 0], points[:, 1], "o", color=self._measurement_color(self.measurement_count+1), markersize=4)
+            self.draw_idle()
+            return
+        self._finish_measurement()
+
+    def _on_key(self, event: Any) -> None:
+        if event.key == "enter" and self._measure_mode:
+            self._finish_measurement()
+        elif event.key == "escape":
+            self.enable_slope_measurement(False)
+            self.draw_idle()
+
+    def _finish_measurement(self) -> None:
+        if len(self._measure_points) < 2:
+            return
+        if self.fit_mode == "segmented" and len(self._measure_points) > 2:
+            points = list(self._measure_points)
+            mode = self.fit_mode; self.fit_mode = "two"
+            for first, second in zip(points[:-1], points[1:]):
+                self._measure_points = [first, second]
+                self._finish_measurement()
+            self.fit_mode = mode
+            return
+        points = np.asarray(sorted(self._measure_points), dtype=float)
+        if self._true_time:
+            time = (points[:, 0]-points[0, 0])*86400.0
+        elif self.result.times is not None:
+            elapsed = (self.result.times-self.result.times[0]).to_value("s")
+            time = np.interp(points[:, 0], self.result.frame_indices, elapsed)
+        else:
+            time = points[:, 0]
+        try:
+            fit = fit_velocity(time, points[:, 1])
+            # Keep the velocity line linear. A separate quadratic estimates
+            # full-interval acceleration regardless of label visibility.
+            motion = fit_motion(time, points[:, 1], self.fit_mode == "acceleration") if self.fit_mode in {"ols", "acceleration"} else None
+            acceleration_fit = None
+            acceleration_reason = None
+            if motion is not None:
+                try:
+                    acceleration_fit = fit_motion(time, points[:, 1], True, allow_exact=True)
+                except ValueError as exc:
+                    acceleration_reason = str(exc)
+        except ValueError as exc:
+            self.slope_measured.emit(str(exc))
+            return
+        for artist in self._pending_artists:
+            artist.remove()
+        self._pending_artists.clear()
         measurement_index = len(self._measurement_groups) + 1
         color = self._pending_color or self._measurement_color(measurement_index)
         self._pending_color = color
-        if len(self._measure_points) < 2:
-            self.draw_idle()
-            return
-        (t1, s1), (t2, s2) = self._measure_points
+        t1, t2 = points[0, 0], points[-1, 0]
+        line_x = np.interp(motion["time"], time, points[:, 0]) if motion is not None else points[:, 0]
+        line_y = motion["fitted"] if motion is not None else fit.fitted
+        s1, s2 = line_y[0], line_y[-1]
         lines = self.axes.plot(
-            [t1, t2], [s1, s2], color=color,
+            line_x, line_y, color=color,
             linewidth=self.slope_linewidth, linestyle=self.slope_linestyle,
         )
         for artist in lines:
             artist.set_gid("slope_measurement")
         self._measurement_artists.extend(lines)
-        delta_t = abs((t2 - t1) * 86400.0) if self._true_time else abs(t2 - t1)
+        delta_t = float(time[-1]-time[0])
         delta_s = s2 - s1
-        velocity = self._velocity_text(delta_s, delta_t, measurement_index)
+        velocity = self._velocity_text(delta_s, delta_t, measurement_index,
+            motion["velocity_stderr"] if motion is not None else fit.stderr)
         text_color = color if self.slope_auto_colors else self.slope_text_color
         transparent = self.slope_background_color.lower() == "transparent"
         label = self.axes.text(
@@ -395,14 +477,34 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             "text_color": text_color,
             "background_color": self.slope_background_color,
             "font_size": self.slope_fontsize,
+            "stderr": motion["velocity_stderr"] if motion is not None else fit.stderr,
+            "points": points.tolist(),
+            "residuals": (motion["residuals"] if motion is not None else fit.residuals).tolist(),
+            "fit_method": "constant acceleration" if self.fit_mode == "acceleration" else ("OLS" if len(points)>2 else "two-point"),
+            "time_basis": "UTC date days" if self._true_time else "frame index",
+            "distance_unit": self.result.distance_unit,
+            "slope_time_unit": "s" if self.result.times is not None else "frame",
             "line": lines[0],
             "label": label,
             "artists": [*lines, label],
         }
+        if motion is not None:
+            group.update(band_x=line_x.tolist(), band_low=(line_y-motion["sigma"]).tolist(),
+                         band_high=(line_y+motion["sigma"]).tolist(), retain_points=True,
+                         acceleration=motion["acceleration"], acceleration_stderr=motion["acceleration_stderr"],
+                         reverses_direction=motion["reverses_direction"], band_definition="1-sigma fitted mean")
+            self._add_fit_artists(group)
+            if acceleration_fit is not None:
+                group.update(acceleration=acceleration_fit["acceleration"],
+                    acceleration_stderr=acceleration_fit["acceleration_stderr"],
+                    acceleration_residuals=acceleration_fit["residuals"].tolist(),
+                    reverses_direction=acceleration_fit["reverses_direction"])
+            group["acceleration_reason"] = acceleration_reason
+            self._style_measurement_group(group)
         self._measurement_groups.append(group)
         self._selected_measurement_index = measurement_index
-        plain_velocity = velocity.replace("$", "").replace("{", "").replace("}", "")
-        time_unit = "s" if self._true_time else "frame"
+        plain_velocity = label.get_text().replace("$", "").replace("{", "").replace("}", "")
+        time_unit = "s" if self.result.times is not None else "frame"
         self.slope_measured.emit(
             f"Δt = {delta_t:.3g} {time_unit}; Δs = {delta_s:.4g} "
             f"{self.result.distance_unit}; {plain_velocity}"
@@ -428,7 +530,68 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
     def _on_release(self, _event: Any) -> None:
         self._drag_label_group = None
 
-    def _velocity_text(self, delta_s: float, delta_t: float, index: int = 1) -> str:
+    def measurement_snapshot(self) -> list[dict[str, Any]]:
+        """Serialize data, residuals, styles and draggable labels, never artists."""
+        result = []
+        for group in self._measurement_groups:
+            snapshot = {k: v for k, v in group.items() if k not in {"line", "label", "artists"}}
+            snapshot["line_x"] = list(group["line"].get_xdata())
+            snapshot["line_y"] = list(group["line"].get_ydata())
+            snapshot["label_position"] = list(group["label"].get_position())
+            result.append(snapshot)
+        return result
+
+    def restore_measurements(self, snapshots: list[dict[str, Any]]) -> None:
+        self.clear_measurements()
+        for snapshot in snapshots:
+            group = dict(snapshot)
+            line, = self.axes.plot(group.pop("line_x"), group.pop("line_y"))
+            label = self.axes.text(*group.pop("label_position"), "", bbox={"pad": 2})
+            line.set_gid("slope_measurement"); label.set_gid("slope_measurement")
+            group.update(line=line, label=label, artists=[line, label])
+            self._add_fit_artists(group)
+            self._measurement_groups.append(group)
+            self._measurement_artists.extend([line, label])
+            self._style_measurement_group(group)
+        self.measurements_changed.emit(); self.draw_idle()
+
+    def _add_fit_artists(self, group: dict[str, Any]) -> None:
+        """Reconstruct auditable picks and mean confidence band from plain data."""
+        extra = []
+        if group.get("retain_points"):
+            points = np.asarray(group["points"])
+            extra.extend(self.axes.plot(points[:, 0], points[:, 1], "o", markersize=4, linestyle="None"))
+        if "band_x" in group:
+            extra.append(self.axes.fill_between(group["band_x"], group["band_low"], group["band_high"], alpha=0.22))
+        for artist in extra:
+            artist.set_gid("slope_measurement")
+        group["artists"].extend(extra)
+        self._measurement_artists.extend(extra)
+
+    def set_show_acceleration(self, show: bool) -> None:
+        """Change label visibility without recalculating fits or moving labels."""
+        self.show_acceleration = bool(show)
+        for group in self._measurement_groups:
+            self._style_measurement_group(group)
+        self.draw_idle()
+
+    def _acceleration_text(self, group: dict[str, Any]) -> str:
+        unit = self.result.distance_unit if self.slope_velocity_unit == "auto" else self.slope_velocity_unit
+        try:
+            factor = convert_distance_value(1, self.result.distance_unit, unit,
+                pixel_scale_arcsec_value=self.result.metadata.get("reference_pixel_scale_arcsec"))
+        except ValueError:
+            return "a = unavailable"
+        denominator = "s" if self.result.times is not None else "frame"
+        def formatted(value: float) -> str:
+            # A small but finite acceleration must not silently read as zero.
+            return f"{value:.{self.slope_precision}e}" if value != 0 and round(value, self.slope_precision) == 0 else f"{value:.{self.slope_precision}f}"
+        error = group.get("acceleration_stderr")
+        error_text = f" ± {formatted(abs(factor)*error)}" if error is not None else " (uncertainty unavailable)"
+        text = rf"$a_{{{group['index']}}}$ = {formatted(factor*group['acceleration'])}{error_text} {unit}/{denominator}²"
+        return text + (" (direction reversal)" if group.get("reverses_direction") else "")
+
+    def _velocity_text(self, delta_s: float, delta_t: float, index: int = 1, stderr: float | None = None) -> str:
         if delta_t == 0:
             return rf"$v_{{{index}}}$ = undefined"
         assert self.result is not None
@@ -444,5 +607,10 @@ class TimeDistanceCanvas(FigureCanvasQTAgg):
             )
         except ValueError:
             return rf"$v_{{{index}}}$ = unavailable"
-        denominator = "s" if self._true_time else "frame"
-        return rf"$v_{{{index}}}$ = {converted / delta_t:.{precision}f} {unit}/{denominator}"
+        denominator = "s" if self.result.times is not None else "frame"
+        error_text = ""
+        if stderr is not None:
+            error = abs(convert_distance_value(stderr, source_unit, unit,
+                pixel_scale_arcsec_value=self.result.metadata.get("reference_pixel_scale_arcsec")))
+            error_text = f" ± {error:.{precision}f}"
+        return rf"$v_{{{index}}}$ = {converted / delta_t:.{precision}f}{error_text} {unit}/{denominator}"

@@ -33,6 +33,7 @@ class TimeSeriesDataset(ABC):
     ) -> None:
         self.source = Path(source)
         self.times = times
+        self.time_origin = "source"
         self._frame_metadata = frame_metadata
         self.shape = tuple(map(int, shape))
         if not frame_metadata:
@@ -81,6 +82,7 @@ class TimeSeriesDataset(ABC):
         if times is not None and len(times) != self.n_frames:
             raise ValueError("Time axis length does not match frame count.")
         self.times = times
+        self.time_origin = "user/project configured"
 
     def summary(self) -> DatasetSummary:
         """Build a stable scan summary, including conservative cadence details."""

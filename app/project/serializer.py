@@ -24,7 +24,15 @@ def save_project(
     regions: list[RegionGeometry] | None = None,
 ) -> None:
     """Persist UI/scientific settings but never duplicate large source arrays."""
-    payload = {
+    payload = project_payload(dataset, paths, active_path_id, reference_frame, display_settings, td_display_settings, regions)
+    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def project_payload(dataset: TimeSeriesDataset, paths: list[PathGeometry], active_path_id: str | None,
+                    reference_frame: int, display_settings: dict[str, Any],
+                    td_display_settings: dict[str, Any], regions: list[RegionGeometry] | None = None) -> dict[str, Any]:
+    """Shared project manifest for lightweight projects and full sessions."""
+    return {
         "format": "SolarTimeDistanceExplorerProject",
         "version": 2,
         "dataset": dataset.project_descriptor(),
@@ -39,7 +47,6 @@ def save_project(
         "td_display_settings": td_display_settings,
         "regions": [item.to_dict() for item in (regions or [])],
     }
-    Path(path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def load_project(path: str | Path) -> dict[str, Any]:

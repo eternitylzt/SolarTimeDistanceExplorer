@@ -191,6 +191,11 @@ installation occurs. About also links directly to all Releases.
 
 ## Troubleshooting
 
+New in the local 1.2 preview: see [ResearchTools.md](ResearchTools.md) for undo/redo,
+quality reports, complete analysis sessions, cache budgets, OLS/segmented velocity
+fits, gap display, region coverage and export provenance. Existing basic workflows
+are unchanged and no additional packages are needed.
+
 * No FITS images found: verify extensions .fits, .fit, or .fts and that each
   data HDU is two-dimensional for folder input.
 * World path unavailable: use Pixel mode, or inspect header WCS keywords under

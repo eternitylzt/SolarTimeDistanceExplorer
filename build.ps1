@@ -72,7 +72,9 @@ $appDirectory = Split-Path -Parent $exe
 Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $appDirectory -Force
 $guideDirectory = Join-Path $appDirectory "docs"
 New-Item -ItemType Directory -Path $guideDirectory -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $projectRoot "docs\UserGuide.md") -Destination $guideDirectory -Force
+foreach ($guide in @("UserGuide.md", "ResearchTools.md", "Algorithm.md")) {
+    Copy-Item -LiteralPath (Join-Path $projectRoot "docs\$guide") -Destination $guideDirectory -Force
+}
 $version = (& $venvPython -c "from app.version import __version__; print(__version__)").Trim()
 $releaseDirectory = Join-Path $projectRoot "release"
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null

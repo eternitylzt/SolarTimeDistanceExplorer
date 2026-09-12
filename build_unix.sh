@@ -36,6 +36,9 @@ if [[ "$system" == "Darwin" ]]; then
         exit 3
     fi
     QT_QPA_PLATFORM=minimal "dist/SolarTimeDistanceExplorer.app/Contents/MacOS/SolarTimeDistanceExplorer" --smoke-test
+    mkdir -p "dist/SolarTimeDistanceExplorer.app/Contents/Resources/docs"
+    cp README.md "dist/SolarTimeDistanceExplorer.app/Contents/Resources/"
+    cp docs/UserGuide.md docs/ResearchTools.md docs/Algorithm.md "dist/SolarTimeDistanceExplorer.app/Contents/Resources/docs/"
     architecture="x64"
     [[ "$machine" == "arm64" ]] && architecture="arm64"
     archive="release/SolarTimeDistanceExplorer-${version}-macOS-${architecture}.zip"
@@ -49,7 +52,7 @@ else
     QT_QPA_PLATFORM=offscreen "dist/SolarTimeDistanceExplorer/SolarTimeDistanceExplorer" --smoke-test
     cp README.md "dist/SolarTimeDistanceExplorer/"
     mkdir -p "dist/SolarTimeDistanceExplorer/docs"
-    cp docs/UserGuide.md "dist/SolarTimeDistanceExplorer/docs/"
+    cp docs/UserGuide.md docs/ResearchTools.md docs/Algorithm.md "dist/SolarTimeDistanceExplorer/docs/"
     architecture="x64"
     [[ "$machine" == "aarch64" || "$machine" == "arm64" ]] && architecture="arm64"
     archive="release/SolarTimeDistanceExplorer-${version}-Linux-${architecture}.tar.gz"
