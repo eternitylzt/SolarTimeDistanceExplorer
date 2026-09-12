@@ -9,14 +9,14 @@ export.
 **Author:** Zhentong Li · eternitylzt@gmail.com ·
 [GitHub](https://github.com/eternitylzt/SolarTimeDistanceExplorer)
 
-> Current version: **1.0.0** — stable research release.
+> Current version: **1.1.0** — independent plot history and manual update checks.
 
 ## 中文说明
 
 ### 下载与运行
 
 在 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases)
-Windows 用户下载 `SolarTimeDistanceExplorer-1.0.0-Windows-x64.zip`。完整解压后运行
+Windows 用户下载 `SolarTimeDistanceExplorer-1.1.0-Windows-x64.zip`。完整解压后运行
 `SolarTimeDistanceExplorer.exe`，无需另装 Python。请保留 EXE 与 `_internal`
 目录的相对位置。EXE 约数十 MB，但它不是独立的 onefile 程序；`_internal` 中的
 Python、Qt、NumPy/SciPy、SunPy/Astropy 与 FFmpeg 是离线运行 FITS/WCS、GUI 和视频
@@ -39,7 +39,9 @@ Python、Qt、NumPy/SciPy、SunPy/Astropy 与 FFmpeg 是离线运行 FITS/WCS、
 - Help 内容使用可滚动、可选择复制的阅读窗口；About 中可复制邮箱并点击项目主页。
 - 速度测量默认输出 km/s；支持 `v₁、v₂…`、All/逐项样式、可拖动文字及独立 Text Background。
 - GIF/MP4、PNG/PDF/EPS/SVG/TIFF、TD/Region FITS/NPZ/CSV/TXT 和 `.stdproj` 项目文件。
-- 绘图历史保存轻量结果快照，可恢复被后续绘图覆盖的趋势、直方图或直方图序列。
+- 未落点前更换 Slit/Region 形状，保留原编号，不占用新名称。
+- 绘图历史在独立窗口保留 TD、趋势和直方图序列；删除或修改标记后仍可查看，不干扰当前绘制。关闭历史或点击“回到最新状态”即可继续操作。
+- Help → **Check for Updates...** 仅手动检查版本，提供 Release 下载页面；不后台检查、不自动下载或安装。About 也提供 Releases 链接。
 
 ### 快速使用
 
@@ -116,7 +118,7 @@ Release asset 上提供 digest 信息。
 
 ### Download
 
-Download `SolarTimeDistanceExplorer-1.0.0-Windows-x64.zip` from
+Download `SolarTimeDistanceExplorer-1.1.0-Windows-x64.zip` from
 [GitHub Releases](https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases),
 extract the complete folder, and run `SolarTimeDistanceExplorer.exe`. Python is
 not required. Keep the EXE beside its `_internal` directory.
@@ -148,6 +150,11 @@ and FFmpeg needed for offline FITS/WCS analysis and movie export, so it is requi
 - Velocity measurements default to km/s. Markers `v₁, v₂…` support automatic
   colours or All/per-marker line, text, text size, and text-background styling.
 - Publication figures, GIF/MP4, numerical TD/Region exports, and JSON project files.
+- Changing an unstarted Slit/Region shape preserves its name and identifier.
+- Independent plot history retains TD/Region results after marker deletion without
+  disturbing current drawing. Close history or choose **Return to Latest State** to resume.
+- Help → **Check for Updates...** manually checks the latest release and opens its
+  download page. No background checks, automatic downloads, or installation.
 
 ### Workflow
 

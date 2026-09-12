@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,7 @@ from app.ui.dialogs import (
     show_error,
 )
 from app.ui.image_plot import ImageCanvas
+from app.ui.history_viewer import HistoryViewer
 from app.ui.panels import DatasetPanel, ImagePanel, PathPanel, RegionPanel
 from app.ui.path_editor import PathEditor
 from app.ui.region_dialogs import ManualRegionDialog
@@ -150,6 +152,7 @@ class MainWindow(QMainWindow):
         self.history_limit = int(self.settings.value("history_limit", 20))
         self._history_entries: list[dict[str, Any]] = []
         self._history_marker_ids: set[str] = set()
+        self._history_viewer: HistoryViewer | None = None
         self._build_ui()
         self._build_actions()
         self._build_menus()
@@ -1053,7 +1056,7 @@ class MainWindow(QMainWindow):
             "【Normalization】Percentile 按可设置的 Lower/Upper percentile 确定显示上下限（默认 1%/99%）；Manual 使用 vmin/vmax；Min–Max 使用当前数据极值；ZScale 使用天文图像常用的鲁棒线性范围。切换或修改参数会立即重绘，但不修改原数据。\n\n"
             "【动画导出】默认导出图像窗口当前显示的坐标范围；也可以改为完整图像。坐标轴、实际观测时间、标题、Colorbar、Slit 和 Region 均可分别选择是否写入每一帧。\n\n"
             "【缓存与保存视图】打开新的数据源时会自动释放上一个数据集的内存与 AIA 临时缓存；也可用“设置 → 清除当前数据缓存”手动释放。保存当前视图时可独立选择是否包含坐标轴、标题和 Colorbar。\n\n"
-            "【绘图历史】“查看 → 绘图历史”按时间记录 Map 数据载入、已完成的 Slit/Region、TD、区域趋势、直方图和直方图序列；Region 结果保存轻量快照，因此共享画布被后续绘图覆盖后仍可恢复。点击可回到对应页面，同一数据源仍打开时还会重新选中标记。默认最多 20 条，可在历史菜单底部调整。\n\n"
+            "【绘图历史】历史在独立窗口中查看，保留当时的 TD、区域趋势、直方图及序列结果，不改变当前绘制。“回到最新状态”关闭历史；只有数据源、标记身份和科学参数仍匹配时，才提供“选回当前匹配标记继续分析”。标记删除或参数改变时显示仅供历史查看。默认最多 20 条，可在历史菜单底部调整。\n\n"
             "【科学宽度阴影】勾选后，Map 上的半透明色带显示实际 Slit 宽度，并随数值/单位实时更新；它对应法向取样范围。显示线宽只改变中心线的屏幕粗细，两者完全独立。\n\n"
             "【绘图页布局】Image、Time–Distance 和 Region 工具栏中的“布局”用于设置 Left/Right/Top/Bottom/WSpace/HSpace。设置会立即应用并按页面保存；这些参数是画布边距/子图间距，不是数据网格刻度间隔。",
             "ZOOM AND DRAWING\nUse Zoom to Rectangle first if needed, then turn zoom off. New Slit/New Region automatically exits navigation mode.\n\n"
@@ -1065,7 +1068,7 @@ class MainWindow(QMainWindow):
             "NORMALIZATION\nPercentile uses the configured lower/upper data percentiles; Manual uses vmin/vmax; Min-Max uses extrema; ZScale uses a robust astronomical display range. These settings never modify source data.\n\n"
             "VELOCITY MEASUREMENT\nTwo clicks create v₁, v₂, … without endpoint circles. Labels are draggable. With Auto Colors disabled, select All or an individual marker before changing line, text, size, or background.\n\n"
             "HISTOGRAM SEQUENCES\nThe calculated histogram arrays are cached in memory. Scrubbing and playback reuse this cache, while one shared zoom/pan viewport is applied to every frame. Movie export can use either that viewport or the full range.\n\n"
-            "CACHE, EXPORT, AND HISTORY\nOpening another source releases the preceding dataset cache. Settings can also clear it manually. Figure export options independently control axes, title, and colorbar. Plot History restores lightweight plot snapshots without copying image cubes."
+            "CACHE, EXPORT, AND HISTORY\nOpening another source releases the preceding dataset cache. Settings can also clear it manually. Figure export options independently control axes, title, and colorbar. Plot History opens independent result views without changing current drawing. Deleted or changed markers are view-only. Return to Latest State closes history; Use matching current markers explicitly selects surviving, unchanged geometry for analysis."
             ), self,
         )
         dialog.exec()
@@ -1098,6 +1101,7 @@ class MainWindow(QMainWindow):
         self.new_path_action = QAction("新建切片", self, triggered=self.new_path)
         self.generate_action = QAction("生成时距图", self, triggered=self.generate_td)
         self.about_action = QAction("关于", self, triggered=self.show_about)
+        self.update_action = QAction("Check for Updates...", self, triggered=self.check_for_updates)
         self.log_action = QAction("打开日志文件夹", self, triggered=self.open_log_folder)
         self.feature_help_action = QAction("主要功能简介", self, triggered=self.show_feature_overview)
         self.drawing_help_action = QAction("切片/区域绘制与科学参数说明", self, triggered=self.show_drawing_help)
@@ -1173,7 +1177,7 @@ class MainWindow(QMainWindow):
         settings_menu.addAction(self.cache_size_action)
         settings_menu.addAction(self.clear_cache_action)
         help_menu = self.menuBar().addMenu("帮助(&H)")
-        help_menu.addActions([self.feature_help_action, self.drawing_help_action, self.about_action, self.log_action])
+        help_menu.addActions([self.feature_help_action, self.drawing_help_action, self.update_action, self.about_action, self.log_action])
 
     def _change_language(self, code: str) -> None:
         """Persist the UI language and offer a clean automatic restart."""
@@ -1243,13 +1247,31 @@ class MainWindow(QMainWindow):
         region_result: RegionTrendResult | RegionHistogramResult | None = None,
         histogram_sequence: RegionHistogramSequence | None = None,
         histogram_position: int = 0,
+        td_result: TDResult | None = None,
     ) -> None:
-        """Record navigation plus lightweight Region result snapshots.
+        """Record isolated plot snapshots and scientific marker identities.
 
         Dataset frames are never copied. Region curves and histogram bins are
         retained so two results rendered in the shared canvas remain independently
         recoverable from the bounded history menu.
         """
+        marker_ids = [marker_id] if marker_id else []
+        product = region_result or (histogram_sequence.results[0] if histogram_sequence else None)
+        if product is not None:
+            marker_ids = list(product.region_ids)
+            marker_kind = "region"
+        markers = self.paths if marker_kind == "slit" else self.regions
+        marker_snapshots = [item.to_dict() for item in markers if item.id in marker_ids]
+        if td_result is not None:
+            marker_snapshots = [td_result.metadata.get("path", {})]
+        options = self._td_plot_options(td_result) if td_result is not None else (
+            self._region_plot_options(product, histogram_sequence) if product is not None else {}
+        )
+        preview = None
+        if main_tab == 0:
+            buffer = BytesIO()
+            self.image_canvas.figure.savefig(buffer, format="png", dpi=100)
+            preview = buffer.getvalue()
         self._history_entries.insert(
             0,
             {
@@ -1267,6 +1289,11 @@ class MainWindow(QMainWindow):
                 "region_result": region_result,
                 "histogram_sequence": histogram_sequence,
                 "histogram_position": int(histogram_position),
+                "td_result": td_result,
+                "marker_ids": marker_ids,
+                "marker_snapshots": marker_snapshots,
+                "plot_options": options,
+                "map_preview": preview,
             },
         )
         del self._history_entries[max(1, self.history_limit):]
@@ -1311,42 +1338,56 @@ class MainWindow(QMainWindow):
         entry = next((item for item in self._history_entries if item["id"] == entry_id), None)
         if entry is None:
             return
-        current_source = str(self.dataset.source) if self.dataset is not None else None
-        if entry.get("source") and entry["source"] != current_source:
-            self.statusBar().showMessage("该历史项属于先前的数据源；请先重新打开对应数据。", 8000)
+        if self._history_viewer is not None:
+            self._history_viewer.close()
+            self._history_viewer.deleteLater()
+        matched, notice = self._history_marker_match(entry)
+        self._history_viewer = HistoryViewer(
+            entry, notice, self,
+            (lambda: self._use_history_markers(entry)) if matched else None,
+        )
+        self._history_viewer.show()
+
+    @staticmethod
+    def _scientific_marker_state(payload: dict[str, Any]) -> dict[str, Any]:
+        """Ignore presentation changes when matching an old scientific geometry."""
+        keys = ("id", "path_type", "region_type", "control_points_pixel", "coordinate_mode",
+                "width", "width_unit", "tracking_mode", "smoothing", "sample_step_pixel",
+                "integration_method", "interpolation", "normalize_exposure",
+                "world_sample_values", "world_outline_values", "world_axis_units")
+        return {key: payload[key] for key in keys if key in payload}
+
+    def _history_marker_match(self, entry: dict[str, Any]) -> tuple[bool, str]:
+        """Match UUID, source and geometry, never a potentially reused S/R name."""
+        source = str(self.dataset.source) if self.dataset is not None else None
+        if source != entry.get("source"):
+            return False, tr("历史数据源与当前不同，仅提供历史查看。", "Different data source; history viewing only.")
+        markers = self.paths if entry.get("marker_kind") == "slit" else self.regions
+        ids = entry.get("marker_ids", [])
+        if any(not any(item.id == marker_id for item in markers) for marker_id in ids):
+            return False, tr("该标记已删除，仅提供历史查看。", "A marker has been deleted; history viewing only.")
+        for snapshot in entry.get("marker_snapshots", []):
+            current = next((item for item in markers if item.id == snapshot.get("id")), None)
+            if current is None or self._scientific_marker_state(current.to_dict()) != self._scientific_marker_state(snapshot):
+                return False, tr("标记参数已改变，仅提供历史查看。", "Marker parameters have changed; history viewing only.")
+        return bool(ids), tr("历史查看：当前绘制状态保持不变。", "History view: your current drawing state is preserved.")
+
+    def _use_history_markers(self, entry: dict[str, Any]) -> None:
+        """Explicitly select surviving markers; never resurrect or overwrite them."""
+        if not self._history_marker_match(entry)[0]:
             return
-        frame = entry.get("frame")
-        if self.dataset is not None and isinstance(frame, int) and 0 <= frame < self.dataset.n_frames:
-            self.set_current_frame(frame)
-        left_tab = entry.get("left_tab")
-        if isinstance(left_tab, int):
-            self.left_tabs.setCurrentIndex(left_tab)
-        self.main_tabs.setCurrentIndex(int(entry["main_tab"]))
-        sequence = entry.get("histogram_sequence")
-        snapshot = entry.get("region_result")
-        if isinstance(sequence, RegionHistogramSequence):
-            self._install_region_histogram_sequence(
-                sequence, int(entry.get("histogram_position", 0)), record=False
-            )
-        elif isinstance(snapshot, (RegionTrendResult, RegionHistogramResult)):
-            self._region_hist_timer.stop()
-            self.region_hist_play.setText("▶ 播放")
-            self.region_histogram_player.setVisible(False)
-            self._region_hist_sequence = None
-            self._full_region_result = snapshot
-            self._apply_region_result_visibility()
-        marker_id = entry.get("marker_id")
-        if entry.get("marker_kind") == "slit" and marker_id:
-            row = next((i for i, item in enumerate(self.paths) if item.id == marker_id), -1)
-            if row >= 0:
-                self.path_panel.paths.setCurrentRow(row)
-                self._active_path_changed(row)
-        elif entry.get("marker_kind") == "region" and marker_id:
-            row = next((i for i, item in enumerate(self.regions) if item.id == marker_id), -1)
-            if row >= 0:
-                self.region_panel.regions.setCurrentRow(row)
-                self._active_region_changed(row)
-        self.statusBar().showMessage(f"已跳转：{entry['description']}")
+        self.main_tabs.setCurrentIndex(0)
+        ids = entry["marker_ids"]
+        if entry.get("marker_kind") == "slit":
+            self.left_tabs.setCurrentIndex(2)
+            self.path_panel.paths.setCurrentRow(self._path_row(ids[0]))
+        else:
+            self.left_tabs.setCurrentIndex(3)
+            for row, item in enumerate(self.regions):
+                self.region_panel.regions.item(row).setCheckState(
+                    Qt.CheckState.Checked if item.id in ids else Qt.CheckState.Unchecked
+                )
+            self.region_panel.regions.setCurrentRow(self._region_row(ids[0]))
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("常用操作")
@@ -1738,6 +1779,15 @@ class MainWindow(QMainWindow):
         self.main_tabs.setCurrentIndex(0)
         self.left_tabs.setCurrentIndex(2)
         self.path_editor.set_enabled(True)
+        path_type = selected_type or self._combo_value(self.path_panel.path_type)
+        pending = self.active_path()
+        if pending is not None and pending.control_count == 0 and path_type != "custom":
+            pending.path_type = path_type
+            self._deactivate_image_navigation()
+            self.region_editor.set_geometry(None)
+            self._load_path_settings(pending)
+            self.path_editor.begin_geometry(pending)
+            return
         self._discard_unfinished_path()
         self._deactivate_image_navigation()
         self.region_editor.set_geometry(None)
@@ -1770,6 +1820,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda marker_id=geometry.id: self._ensure_new_path_drawing(marker_id))
 
     def _ensure_new_path_drawing(self, marker_id: str) -> None:
+        if self.left_tabs.currentIndex() != 2 or self.main_tabs.currentIndex() != 0:
+            return
         geometry = next((item for item in self.paths if item.id == marker_id), None)
         if geometry is None or geometry.id != self.active_path_id or geometry.control_count:
             return
@@ -1785,6 +1837,8 @@ class MainWindow(QMainWindow):
         if geometry.complete:
             self.path_editor.finish()
             return
+        if geometry.control_count == 0 and geometry.name == f"S{self._next_slit_number - 1}":
+            self._next_slit_number -= 1
         self.path_editor.cancel()
         row = self._path_row(geometry.id)
         if row >= 0:
@@ -1817,6 +1871,15 @@ class MainWindow(QMainWindow):
         self.main_tabs.setCurrentIndex(0)
         self.left_tabs.setCurrentIndex(3)
         self.region_editor.set_enabled(True)
+        region_type = selected_type or self._combo_value(self.region_panel.region_type)
+        pending = self.active_region()
+        if pending is not None and len(pending.control_points_pixel) == 0:
+            pending.region_type = region_type
+            self._deactivate_image_navigation()
+            self.path_editor.set_geometry(None)
+            self._load_region_settings(pending)
+            self.region_editor.begin_geometry(pending)
+            return
         self._discard_unfinished_region()
         self._deactivate_image_navigation()
         self.path_editor.set_geometry(None)
@@ -1842,6 +1905,8 @@ class MainWindow(QMainWindow):
         if geometry.complete:
             self.region_editor.finish()
             return
+        if len(geometry.control_points_pixel) == 0 and geometry.name == f"R{self._next_region_number - 1}":
+            self._next_region_number -= 1
         self.region_editor.cancel()
         row = self._region_row(geometry.id)
         if row >= 0:
@@ -2336,6 +2401,14 @@ class MainWindow(QMainWindow):
             return
         if self._region_hist_sequence is not None and not self._region_hist_switching:
             self._capture_region_histogram_viewport()
+        options = self._region_plot_options(self.region_result, self._region_hist_sequence)
+        if isinstance(self.region_result, RegionTrendResult):
+            self.region_canvas.show_trends(self.region_result, **options)
+        else:
+            self.region_canvas.show_histograms(self.region_result, **options)
+
+    def _region_plot_options(self, result: Any, sequence: RegionHistogramSequence | None = None) -> dict[str, Any]:
+        """Capture the same publication parameters for live and historical plots."""
         formats = {
             "HH:MM:SS": "%H:%M:%S",
             "HH:MM": "%H:%M",
@@ -2355,9 +2428,8 @@ class MainWindow(QMainWindow):
             "title_size": self.region_title_size.value(),
             "legend_fontsize": self.region_legend_size.value(),
         }
-        if isinstance(self.region_result, RegionTrendResult):
-            self.region_canvas.show_trends(
-                self.region_result,
+        if isinstance(result, RegionTrendResult):
+            return dict(
                 time_format=formats[self._combo_value(self.region_time_format)],
                 plot_type=self._combo_value(self.region_panel.trend_plot_type),
                 **common,
@@ -2365,14 +2437,13 @@ class MainWindow(QMainWindow):
         else:
             x_limits = None
             y_limits = None
-            if self._region_hist_sequence is not None:
+            if sequence is not None:
                 limits = self._region_hist_viewport or self._region_histogram_full_limits(
-                    self._region_hist_sequence
+                    sequence
                 )
                 x_limits = limits[0]
                 y_limits = limits[1]
-            self.region_canvas.show_histograms(
-                self.region_result,
+            return dict(
                 x_scale=self._combo_value(self.region_x_scale),
                 plot_type=self._combo_value(self.region_panel.histogram_plot_type),
                 y_unit=self._combo_value(self.region_panel.histogram_y_unit),
@@ -2619,13 +2690,13 @@ class MainWindow(QMainWindow):
         self._redraw_td()
         self.main_tabs.setCurrentIndex(1)
         self.statusBar().showMessage(f"时距图已完成：{result.shape[0]} 个距离采样 × {result.shape[1]} 个时刻。")
-        slit = self.active_path()
         self._record_history(
-            f"Time–Distance: {slit.name if slit is not None else 'Slit'}",
+            f"Time–Distance: {result.metadata.get('path', {}).get('name', 'Slit')}",
             main_tab=1,
             left_tab=2,
-            marker_kind="slit" if slit is not None else None,
-            marker_id=slit.id if slit is not None else None,
+            marker_kind="slit",
+            marker_id=result.path_id,
+            td_result=result,
         )
 
     def _td_failed(self, message: str, trace: str) -> None:
@@ -2651,6 +2722,10 @@ class MainWindow(QMainWindow):
     def _redraw_td(self) -> None:
         if self.td_result is None:
             return
+        self.td_canvas.show_result(self.td_result, **self._td_plot_options(self.td_result))
+
+    def _td_plot_options(self, result: TDResult) -> dict[str, Any]:
+        """Capture TD display parameters without sharing interactive canvas state."""
         formats = {
             "HH:MM:SS": "%H:%M:%S",
             "HH:MM": "%H:%M",
@@ -2658,10 +2733,9 @@ class MainWindow(QMainWindow):
         }
         selected = self._combo_value(self.td_time_format)
         time_format = self.td_custom_format.text().strip() if selected == "Custom" else formats[selected]
-        path_name = str(self.td_result.metadata.get("path", {}).get("name", ""))
+        path_name = str(result.metadata.get("path", {}).get("name", ""))
         automatic_title = f"Time–Distance Diagram — {path_name}" if path_name else "Time–Distance Diagram"
-        self.td_canvas.show_result(
-            self.td_result,
+        return dict(
             cmap=self.td_cmap.currentText(),
             normalization_mode=self._combo_value(self.td_norm),
             stretch=self._combo_value(self.td_stretch),
@@ -3119,6 +3193,14 @@ class MainWindow(QMainWindow):
             f"像素：x={details['x']:.2f}, y={details['y']:.2f}；数值={value_text}{world_text}"
         )
 
+    def check_for_updates(self) -> None:
+        """Check only when requested; closing cancels the outstanding request."""
+        from app.ui.update_dialog import UpdateDialog
+
+        dialog = UpdateDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
     def show_about(self) -> None:
         """Show software and scientific runtime versions."""
         import astropy
@@ -3140,7 +3222,9 @@ class MainWindow(QMainWindow):
             + "<p><b>Email:</b> <a href='mailto:eternitylzt@gmail.com'>"
             "eternitylzt@gmail.com</a><br>"
             "<b>GitHub:</b> <a href='https://github.com/eternitylzt/SolarTimeDistanceExplorer'>"
-            "SolarTimeDistanceExplorer project homepage</a></p>"
+            "SolarTimeDistanceExplorer project homepage</a><br>"
+            "<b>Releases:</b> <a href='https://github.com/eternitylzt/SolarTimeDistanceExplorer/releases'>"
+            "Download releases</a></p>"
             + f"<p>{tr('Python 运行时；', 'Python runtime; ')}"
             f"SunPy {sunpy.__version__}; aiapy {aiapy.__version__}; Astropy {astropy.__version__}; "
             f"NumPy {numpy.__version__}; SciPy {scipy.__version__}; "

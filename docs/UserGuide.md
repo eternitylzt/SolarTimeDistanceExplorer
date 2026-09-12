@@ -172,12 +172,22 @@ Settings → Language switches the complete application interface between Chines
 and English. The preference is saved with the application settings. Accept the
 restart prompt to relaunch automatically; declining applies it on the next start.
 
-View → Drawing History lists the most recent map loads, completed Slits and
-Regions, TD results, region trends, histograms, and histogram sequences. Region
-analysis entries retain lightweight numerical snapshots, so an earlier trend or
-distribution can be restored after a later plot reused the canvas. Marker entries
-also reselect that marker while its dataset remains open. The default maximum is
-20 and can be changed from the bottom of the same menu.
+View → Drawing History opens independent historical views of maps, completed
+markers, TD results, region trends, histograms, and histogram sequences. Deleted
+or scientifically changed markers are explicitly marked as view-only. Matching
+current markers can be selected for further analysis using an explicit button;
+opening history itself does not change your current frame, results, or drawing.
+Close the window or choose Return to Latest State to continue. Historical
+histogram sequences have their own playback controls. The default history limit
+is 20 and can be changed at the bottom of the menu.
+
+If no control point has been placed, choosing another shape from New Slit or
+New Region reuses the pending marker name instead of consuming a new number.
+
+Help → Check for Updates... checks GitHub only when clicked. A newer version
+offers a button opening that exact Release page; otherwise the dialog reports
+that the app is up to date or shows a network error. No automatic download or
+installation occurs. About also links directly to all Releases.
 
 ## Troubleshooting
 

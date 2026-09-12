@@ -148,6 +148,13 @@ def run() -> int:
             # window has already loaded the Qt/Matplotlib plugins we need to
             # validate; process pending events once, then exit deterministically.
             app.processEvents()
+            # Validate the manual-update dialog and TLS packaging without making
+            # a network request during startup or build smoke tests.
+            from app.ui.update_dialog import UpdateDialog  # noqa: F401
+            from PySide6.QtNetwork import QSslSocket
+
+            if not QSslSocket.supportsSsl():
+                raise RuntimeError("The bundled Qt runtime has no TLS support.")
             if os.environ.get("STDE_SMOKE_EXPORTS") == "1":
                 _validate_scientific_runtime()
                 _smoke_marker("scientific runtime smoke succeeded")

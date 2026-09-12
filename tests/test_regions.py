@@ -109,14 +109,24 @@ def test_region_history_restores_overwritten_result_and_sequence(tmp_path) -> No
     trend_entry = window._history_entries[0]["id"]
     window._record_history("hist", main_tab=2, left_tab=3, region_result=histogram)
     window._open_history_entry(trend_entry)
-    assert window.region_result is not trend
-    assert window.region_result.statistic == "mean"
+    assert window.region_result is None
+    assert window._history_viewer.result is trend
     sequence = region_histogram_sequence(dataset, [region], 0, 2, 1, 0.5)
     window._record_history("sequence", main_tab=2, left_tab=3, histogram_sequence=sequence)
     sequence_entry = window._history_entries[0]["id"]
     window._open_history_entry(sequence_entry)
-    assert window._region_hist_sequence is not None
-    assert not window.region_histogram_player.isHidden()
+    assert window._region_hist_sequence is None
+    assert window._history_viewer.sequence is sequence
+    window.regions.clear()
+    window._open_history_entry(trend_entry)
+    assert window._history_viewer.result is trend
+    assert not window._history_marker_match(window._history_viewer.entry)[0]
+    assert len(window._history_viewer.canvas.axes.lines) == 1
+    window._open_history_entry(sequence_entry)
+    window._history_viewer.show_frame(2)
+    assert window._history_viewer.result is sequence.results[2]
+    assert window.region_result is None
+    window._history_viewer.close()
     window.close(); app.processEvents()
 
 
